@@ -80,12 +80,12 @@ pub fn build_repo(repo_path: &Path) -> Result<()> {
     };
 
     // install step
-    let bin_dir = microxdg::Xdg::new()?.bin()?;
+    let bin_dir = microxdg::Xdg::new()?.bin()?.join(hash);
     fs::create_dir_all(&bin_dir)?;
 
     for binary in binaries {
         if let Some(name) = binary.file_name() {
-            let dest = bin_dir.join(hash).join(name);
+            let dest = bin_dir.join(name);
             fs::copy(&binary, &dest)?;
         }
     }
