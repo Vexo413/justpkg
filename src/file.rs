@@ -62,6 +62,7 @@ pub fn add(url: &str, base: PathBuf) -> Result<()> {
 /// Build repo + install binaries
 /// -------------------------
 pub fn build_repo(repo_path: &Path) -> Result<()> {
+    let hash = repo_path.file_name().expect("Genuinely, WTF are you doing");
     let justfile = repo_path.join("justfile");
     let makefile = repo_path.join("Makefile");
     let cargo_toml = repo_path.join("Cargo.toml");
@@ -85,21 +86,20 @@ pub fn build_repo(repo_path: &Path) -> Result<()> {
 
     for binary in binaries {
         if let Some(name) = binary.file_name() {
-            let dest = bin_dir.join(name);
+            let dest = bin_dir.join(hash).join(name);
             fs::copy(&binary, &dest)?;
         }
     }
-
     Ok(())
 }
 
 pub fn update(packages: &Vec<String>, base: PathBuf) -> Result<()> {
     let mut changed = false;
+    std::fs::create_dir_all(&base)?;
+
+    let mut repo_infos = get_repos(&base)?;
     if packages.is_empty() {
         println!("Updating all...");
-        std::fs::create_dir_all(&base)?;
-
-        let mut repo_infos = get_repos(&base)?;
 
         for (hash, repo_info) in repo_infos.iter_mut() {
             let repo = git2::Repository::open(base.join(hash))?;
@@ -132,40 +132,30 @@ pub fn update(packages: &Vec<String>, base: PathBuf) -> Result<()> {
         }
     } else {
         println!("Updating...");
-        std::fs::create_dir_all(&base)?;
-        let hashes_vec = packages
-            .iter()
-            .map(|url| {
-                let normalized = normalize_url(url)?;
-                Ok(hash_string(&normalized))
-            })
-            .collect::<Result<Vec<String>>>()?;
-        let mut repo_infos = get_repos(&base)?;
+        for package in packages {
+            let hash = hash_string(&normalize_url(package)?);
+            if let Some(repo_info) = repo_infos.get_mut(&hash) {
+                let repo = git2::Repository::open(base.join(&hash))?;
+                {
+                    let mut remote = repo.find_remote("origin")?;
+                    remote.fetch(&[] as &[&str], None, None)?;
+                }
 
-        for (hash, repo_info) in repo_infos.iter_mut() {
-            if !hashes_vec.contains(hash) {
-                continue;
-            }
-            let repo = git2::Repository::open(base.join(hash))?;
-            {
-                let mut remote = repo.find_remote("origin")?;
-                remote.fetch(&[] as &[&str], None, None)?;
-            }
+                let oid = repo.refname_to_id("refs/remotes/origin/HEAD")?;
+                let remote_obj = repo.find_object(oid, Some(ObjectType::Commit))?;
 
-            let oid = repo.refname_to_id("refs/remotes/origin/HEAD")?;
-            let remote_obj = repo.find_object(oid, Some(ObjectType::Commit))?;
+                repo.reset(&remote_obj, ResetType::Hard, None)?;
 
-            repo.reset(&remote_obj, ResetType::Hard, None)?;
-
-            let head_oid = repo.head()?.target().map(|v| v.to_string());
-            if repo_info.last_commit != head_oid {
-                println!("Rebuilding {}", repo_info.url);
-                build_repo(&base.join(hash))?;
-                println!("Rebuilt {}", repo_info.url);
-                repo_info.last_commit = head_oid;
-                changed = true;
-            } else {
-                println!("{} is already up-to-date", repo_info.url);
+                let head_oid = repo.head()?.target().map(|v| v.to_string());
+                if repo_info.last_commit != head_oid {
+                    println!("Rebuilding...");
+                    build_repo(&base.join(hash))?;
+                    println!("Rebuilt {}", repo_info.url);
+                    repo_info.last_commit = head_oid;
+                    changed = true;
+                } else {
+                    println!("{} is already up-to-date", repo_info.url);
+                }
             }
         }
         if changed {
@@ -306,5 +296,31 @@ fn save_repos(base: &Path, repo_infos: &HashMap<String, RepoInfo>) -> Result<()>
     let path = base.join("repos.json");
     let json = serde_json::to_string_pretty(repo_infos)?;
     fs::write(path, json)?;
+    Ok(())
+}
+
+pub fn remove(packages: &Vec<String>, base: PathBuf) -> Result<()> {
+    std::fs::create_dir_all(&base)?;
+    let mut repo_infos = get_repos(&base)?;
+    let mut changed = false;
+
+    println!("Removing...");
+    for package in packages {
+        let hash = hash_string(&normalize_url(package)?);
+        if let Some(_repo_info) = repo_infos.remove(&hash) {
+            println!("Deleting...");
+            std::fs::remove_dir_all(base.join(hash))?;
+            println!("Deleted: {}", package);
+            changed = true;
+        } else {
+            println!("{} doesn't exist", package);
+        }
+    }
+    if changed {
+        save_repos(&base, &repo_infos)?;
+        println!("Removed packages");
+    } else {
+        println!("Packages don't exist");
+    }
     Ok(())
 }

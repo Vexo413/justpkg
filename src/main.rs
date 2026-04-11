@@ -28,6 +28,9 @@ enum Commands {
     Update {
         packages: Vec<String>,
     },
+    Rm {
+        packages: Vec<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -45,6 +48,10 @@ fn main() -> Result<()> {
         }
         Some(Commands::Update { packages }) => {
             update(packages, base)?;
+            Ok(())
+        }
+        Some(Commands::Rm { packages }) => {
+            remove(packages, base)?;
             Ok(())
         }
         None => return Ok(()),
