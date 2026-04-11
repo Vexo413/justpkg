@@ -34,7 +34,7 @@ pub fn add(url: &str, base: PathBuf) -> Result<()> {
 
     // 2. Clone/Open repo
     let repo = if repo_path.exists() {
-        update(&Some(vec![url.to_string()]), base)?;
+        update(&vec![url.to_string()], base)?;
         return Ok(());
     } else {
         RepoBuilder::new().clone(url, &repo_path)?
@@ -93,9 +93,9 @@ pub fn build_repo(repo_path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn update(packages: &Option<Vec<String>>, base: PathBuf) -> Result<()> {
+pub fn update(packages: &Vec<String>, base: PathBuf) -> Result<()> {
     let mut changed = false;
-    if packages.is_none() {
+    if packages.is_empty() {
         println!("Updating all...");
         std::fs::create_dir_all(&base)?;
 
@@ -130,10 +130,10 @@ pub fn update(packages: &Option<Vec<String>>, base: PathBuf) -> Result<()> {
         } else {
             println!("All packages were already up-to-date");
         }
-    } else if let Some(packages_vec) = packages {
+    } else {
         println!("Updating...");
         std::fs::create_dir_all(&base)?;
-        let hashes_vec = packages_vec
+        let hashes_vec = packages
             .iter()
             .map(|url| {
                 let normalized = normalize_url(url)?;

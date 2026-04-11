@@ -26,7 +26,7 @@ enum Commands {
         url: String,
     },
     Update {
-        packages: Option<Vec<String>>,
+        packages: Vec<String>,
     },
 }
 
