@@ -43,7 +43,6 @@ pub fn add(url: &str, base: PathBuf) -> Result<()> {
     println!("Building: {}", url);
     build_repo(&repo_path)?;
     println!("Built: {}", url);
-
     // 4. Capture current state
     let last_commit = repo.head()?.target().map(|oid| oid.to_string());
     let repo_info = RepoInfo {
@@ -117,9 +116,9 @@ pub fn update(packages: &Option<Vec<String>>, base: PathBuf) -> Result<()> {
             if repo_info.last_commit != head_oid {
                 println!("Rebuilding {}", repo_info.url);
                 build_repo(&base.join(hash))?;
+                println!("Rebuilt {}", repo_info.url);
                 repo_info.last_commit = head_oid;
                 changed = true;
-                println!("Rebuilt {}", repo_info.url);
             } else {
                 println!("{} is already up-to-date", repo_info.url);
             }
