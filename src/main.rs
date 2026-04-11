@@ -1,12 +1,9 @@
 mod file;
 
-use anyhow::{Result, anyhow};
+use crate::file::*;
+use anyhow::Result;
 use clap::{Parser, Subcommand};
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::{path::PathBuf, process::Command};
-
-use crate::file::{add, update};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
