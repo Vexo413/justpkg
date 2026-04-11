@@ -34,13 +34,14 @@ pub fn add(url: &str, base: PathBuf) -> Result<()> {
 
     // 2. Clone/Open repo
     let repo = if repo_path.exists() {
-        return Err(anyhow!("{url} is already installed"));
+        update(&Some(vec![url.to_string()]), base)?;
+        return Ok(());
     } else {
         RepoBuilder::new().clone(url, &repo_path)?
     };
 
     // 3. Build
-    println!("Building: {}", url);
+    println!("Building...");
     build_repo(&repo_path)?;
     println!("Built: {}", url);
     // 4. Capture current state
@@ -95,12 +96,56 @@ pub fn build_repo(repo_path: &Path) -> Result<()> {
 pub fn update(packages: &Option<Vec<String>>, base: PathBuf) -> Result<()> {
     let mut changed = false;
     if packages.is_none() {
-        println!("Updating all");
+        println!("Updating all...");
         std::fs::create_dir_all(&base)?;
 
         let mut repo_infos = get_repos(&base)?;
 
         for (hash, repo_info) in repo_infos.iter_mut() {
+            let repo = git2::Repository::open(base.join(hash))?;
+            {
+                let mut remote = repo.find_remote("origin")?;
+                remote.fetch(&[] as &[&str], None, None)?;
+            }
+
+            let oid = repo.refname_to_id("refs/remotes/origin/HEAD")?;
+            let remote_obj = repo.find_object(oid, Some(ObjectType::Commit))?;
+
+            repo.reset(&remote_obj, ResetType::Hard, None)?;
+
+            let head_oid = repo.head()?.target().map(|v| v.to_string());
+            if repo_info.last_commit != head_oid {
+                println!("Rebuilding...");
+                build_repo(&base.join(hash))?;
+                println!("Rebuilt {}", repo_info.url);
+                repo_info.last_commit = head_oid;
+                changed = true;
+            } else {
+                println!("{} is already up-to-date", repo_info.url);
+            }
+        }
+        if changed {
+            save_repos(&base, &repo_infos)?;
+            println!("Updated all packages");
+        } else {
+            println!("All packages already up-to-date");
+        }
+    } else if let Some(packages_vec) = packages {
+        println!("Updating...");
+        std::fs::create_dir_all(&base)?;
+        let hashes_vec = packages_vec
+            .iter()
+            .map(|url| {
+                let normalized = normalize_url(url)?;
+                Ok(hash_string(&normalized))
+            })
+            .collect::<Result<Vec<String>>>()?;
+        let mut repo_infos = get_repos(&base)?;
+
+        for (hash, repo_info) in repo_infos.iter_mut() {
+            if !hashes_vec.contains(hash) {
+                continue;
+            }
             let repo = git2::Repository::open(base.join(hash))?;
             {
                 let mut remote = repo.find_remote("origin")?;
@@ -125,8 +170,9 @@ pub fn update(packages: &Option<Vec<String>>, base: PathBuf) -> Result<()> {
         }
         if changed {
             save_repos(&base, &repo_infos)?;
+            println!("Updated package(s)");
         } else {
-            println!("No packages to update");
+            println!("Packages already up-to-date");
         }
     }
     Ok(())
