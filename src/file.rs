@@ -41,7 +41,6 @@ pub fn add(url: &str, base: PathBuf) -> Result<()> {
     };
 
     // 3. Build
-    println!("Building...");
     build_repo(&repo_path)?;
     println!("Built: {}", url);
     // 4. Capture current state
@@ -115,7 +114,6 @@ pub fn update(packages: &Vec<String>, base: PathBuf) -> Result<()> {
 
             let head_oid = repo.head()?.target().map(|v| v.to_string());
             if repo_info.last_commit != head_oid {
-                println!("Rebuilding...");
                 build_repo(&base.join(hash))?;
                 println!("Rebuilt {}", repo_info.url);
                 repo_info.last_commit = head_oid;
@@ -148,7 +146,6 @@ pub fn update(packages: &Vec<String>, base: PathBuf) -> Result<()> {
 
                 let head_oid = repo.head()?.target().map(|v| v.to_string());
                 if repo_info.last_commit != head_oid {
-                    println!("Rebuilding...");
                     build_repo(&base.join(hash))?;
                     println!("Rebuilt {}", repo_info.url);
                     repo_info.last_commit = head_oid;
@@ -308,7 +305,6 @@ pub fn remove(packages: &Vec<String>, base: PathBuf) -> Result<()> {
     for package in packages {
         let hash = hash_string(&normalize_url(package)?);
         if let Some(_repo_info) = repo_infos.remove(&hash) {
-            println!("Deleting...");
             std::fs::remove_dir_all(base.join(hash))?;
             println!("Deleted: {}", package);
             changed = true;
