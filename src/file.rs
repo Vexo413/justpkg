@@ -170,7 +170,7 @@ pub fn update(packages: &Vec<String>, base: PathBuf) -> Result<()> {
         }
         if changed {
             save_repos(&base, &repo_infos)?;
-            println!("Updated package(s)");
+            println!("Updated packages");
         } else {
             println!("Packages were already up-to-date");
         }
