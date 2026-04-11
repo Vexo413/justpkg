@@ -128,7 +128,7 @@ pub fn update(packages: &Option<Vec<String>>, base: PathBuf) -> Result<()> {
             save_repos(&base, &repo_infos)?;
             println!("Updated all packages");
         } else {
-            println!("All packages already up-to-date");
+            println!("All packages were already up-to-date");
         }
     } else if let Some(packages_vec) = packages {
         println!("Updating...");
@@ -172,7 +172,7 @@ pub fn update(packages: &Option<Vec<String>>, base: PathBuf) -> Result<()> {
             save_repos(&base, &repo_infos)?;
             println!("Updated package(s)");
         } else {
-            println!("Packages already up-to-date");
+            println!("Packages were already up-to-date");
         }
     }
     Ok(())
