@@ -4,7 +4,7 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Command,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Result, anyhow};
@@ -220,14 +220,7 @@ fn find_binaries_in_dir(dir: &Path) -> Result<Vec<PathBuf>> {
 
 fn is_executable(path: &Path) -> Result<bool> {
     let meta = fs::metadata(path)?;
-    #[cfg(unix)]
-    {
-        Ok(meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-    }
-    #[cfg(not(unix))]
-    {
-        Ok(path.extension().and_then(|e| e.to_str()) == Some("exe"))
-    }
+    Ok(meta.is_file() && meta.permissions().mode() & 0o111 != 0)
 }
 
 /// -------------------------
