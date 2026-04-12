@@ -254,7 +254,6 @@ pub fn info(packages: &Vec<String>, base: PathBuf) -> Result<()> {
 }
 
 fn resolve_package(input: &str, repo_infos: &HashMap<String, RepoInfo>) -> Result<Option<String>> {
-    // 1. Is it a URL?
     if input.contains("://") || input.contains("git@") || input.contains("github.com") {
         let normalized = normalize_url(input)?;
         let hash = hash_string(&normalized);
@@ -263,14 +262,12 @@ fn resolve_package(input: &str, repo_infos: &HashMap<String, RepoInfo>) -> Resul
         }
     }
 
-    // 2. Is it any of the binaries names?
     for (hash, info) in repo_infos {
         if info.binaries.iter().any(|b| b == input) {
             return Ok(Some(hash.clone()));
         }
     }
 
-    // 3. Matches the hash (prefix matching)
     let mut matches = Vec::new();
     for hash in repo_infos.keys() {
         if hash.starts_with(input) {

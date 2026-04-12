@@ -40,6 +40,7 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
+    println!("hi");
     let cli = Cli::parse();
 
     if let Some(config_path) = cli.config.as_deref() {
