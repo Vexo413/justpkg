@@ -284,7 +284,7 @@ pub fn remove(urls: &Vec<String>, base: PathBuf) -> Result<()> {
     for url in urls {
         let hash = hash_string(&normalize_url(url)?);
         if let Some(repo_info) = repo_infos.remove(&hash) {
-            std::fs::remove_dir_all(xdg.data()?.join(hash))?;
+            std::fs::remove_dir_all(base.join(hash))?;
             for binary in repo_info.binaries {
                 std::fs::remove_file(xdg.bin()?.join(binary))?;
             }
