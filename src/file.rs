@@ -311,7 +311,7 @@ pub fn list(base: PathBuf) -> Result<()> {
     let repo_infos = get_repos(&base)?;
     for (hash, repo_info) in repo_infos.iter() {
         println!(
-            "{}{}{}",
+            "{} | {} | {}",
             hash,
             repo_info.url,
             millis_to_datetime(repo_info.fetched_at as u64)
