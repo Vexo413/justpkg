@@ -32,7 +32,7 @@ pub fn add(packages: &Vec<String>, base: PathBuf) -> Result<()> {
 
         let repo = if repo_path.exists() {
             update(&vec![package.to_string()], base.clone())?;
-            return Ok(());
+            continue;
         } else {
             let mut fetch_options = FetchOptions::new();
             fetch_options.depth(1);
