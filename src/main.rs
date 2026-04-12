@@ -19,13 +19,23 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Adds a package
-    Add { urls: Vec<String> },
+    Add {
+        urls: Vec<String>,
+    },
     /// Updates packages
-    Update { urls: Vec<String> },
+    Update {
+        urls: Vec<String>,
+    },
     /// Removes packages
-    Rm { urls: Vec<String> },
+    Rm {
+        urls: Vec<String>,
+    },
     /// Lists packages
     Ls,
+
+    Info {
+        urls: Vec<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -51,6 +61,10 @@ fn main() -> Result<()> {
         }
         Some(Commands::Ls) => {
             list(base)?;
+            Ok(())
+        }
+        Some(Commands::Info { urls }) => {
+            info(&urls, base)?;
             Ok(())
         }
         None => return Ok(()),

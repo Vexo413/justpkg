@@ -323,11 +323,30 @@ pub fn list(base: PathBuf) -> Result<()> {
     let repo_infos = get_repos(&base)?;
     for (hash, repo_info) in repo_infos.iter() {
         println!(
-            "{} | {} | {}",
+            "{} | {} | {} | {:?}",
             hash,
             repo_info.url,
-            millis_to_datetime(repo_info.fetched_at as u64)
+            millis_to_datetime(repo_info.fetched_at as u64),
+            repo_info.binaries
         );
+    }
+    Ok(())
+}
+pub fn info(urls: &Vec<String>, base: PathBuf) -> Result<()> {
+    std::fs::create_dir_all(&base)?;
+    let repo_infos = get_repos(&base)?;
+
+    for url in urls {
+        let hash = hash_string(&normalize_url(url)?);
+        if let Some(repo_info) = repo_infos.get(&hash) {
+            println!("{}", hash);
+            println!("Url: {}", repo_info.url);
+            println!(
+                "Fetched at: {}",
+                millis_to_datetime(repo_info.fetched_at as u64),
+            );
+            println!("Binaries: {:?}", repo_info.binaries);
+        }
     }
     Ok(())
 }
