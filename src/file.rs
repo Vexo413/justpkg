@@ -24,7 +24,6 @@ pub fn add(urls: &Vec<String>, base: PathBuf) -> Result<()> {
     std::fs::create_dir_all(&base)?;
     let mut repo_infos = get_repos(&base)?;
     let mut changed = false;
-    println!("Adding");
     for url in urls {
         let normalized = normalize_url(&url)?;
         let hash = hash_string(&normalized);
@@ -38,7 +37,6 @@ pub fn add(urls: &Vec<String>, base: PathBuf) -> Result<()> {
         };
 
         build_repo(&repo_path)?;
-        println!("Built: {}", url);
 
         let last_commit = repo.head()?.target().map(|oid| oid.to_string());
         let repo_info = RepoInfo {
@@ -49,17 +47,15 @@ pub fn add(urls: &Vec<String>, base: PathBuf) -> Result<()> {
 
         repo_infos.insert(hash, repo_info);
         changed = true;
+        println!("Added: {}", url);
     }
     if changed {
         save_repos(&base, &repo_infos)?;
-        println!("Added packages");
     }
+    println!("Finished");
     Ok(())
 }
 
-/// -------------------------
-/// Build repo + install binaries
-/// -------------------------
 pub fn build_repo(repo_path: &Path) -> Result<()> {
     let justfile = repo_path.join("justfile");
     let makefile = repo_path.join("Makefile");
@@ -98,8 +94,6 @@ pub fn update(urls: &Vec<String>, base: PathBuf) -> Result<()> {
 
     let mut repo_infos = get_repos(&base)?;
     if urls.is_empty() {
-        println!("Updating all...");
-
         for (hash, repo_info) in repo_infos.iter_mut() {
             let repo = git2::Repository::open(base.join(hash))?;
             {
@@ -115,21 +109,18 @@ pub fn update(urls: &Vec<String>, base: PathBuf) -> Result<()> {
             let head_oid = repo.head()?.target().map(|v| v.to_string());
             if repo_info.last_commit != head_oid {
                 build_repo(&base.join(hash))?;
-                println!("Rebuilt {}", repo_info.url);
                 repo_info.last_commit = head_oid;
                 changed = true;
+                println!("Updated: {}", repo_info.url);
             } else {
                 println!("{} is already up-to-date", repo_info.url);
             }
         }
         if changed {
             save_repos(&base, &repo_infos)?;
-            println!("Updated all packages");
-        } else {
-            println!("All packages were already up-to-date");
         }
+        println!("Finished");
     } else {
-        println!("Updating...");
         for url in urls {
             let hash = hash_string(&normalize_url(url)?);
             if let Some(repo_info) = repo_infos.get_mut(&hash) {
@@ -147,9 +138,9 @@ pub fn update(urls: &Vec<String>, base: PathBuf) -> Result<()> {
                 let head_oid = repo.head()?.target().map(|v| v.to_string());
                 if repo_info.last_commit != head_oid {
                     build_repo(&base.join(hash))?;
-                    println!("Rebuilt {}", repo_info.url);
                     repo_info.last_commit = head_oid;
                     changed = true;
+                    println!("Updated: {}", repo_info.url);
                 } else {
                     println!("{} is already up-to-date", repo_info.url);
                 }
@@ -157,10 +148,8 @@ pub fn update(urls: &Vec<String>, base: PathBuf) -> Result<()> {
         }
         if changed {
             save_repos(&base, &repo_infos)?;
-            println!("Updated packages");
-        } else {
-            println!("Packages were already up-to-date");
         }
+        println!("Finished");
     }
     Ok(())
 }
@@ -222,9 +211,6 @@ fn is_executable(path: &Path) -> Result<bool> {
     Ok(meta.is_file() && meta.permissions().mode() & 0o111 != 0)
 }
 
-/// -------------------------
-/// Filter intermediates
-/// -------------------------
 fn is_intermediate(path: &Path) -> bool {
     match path.extension().and_then(|e| e.to_str()) {
         Some("o") | Some("a") | Some("so") | Some("dylib") | Some("dll") | Some("rlib") => true,
@@ -232,9 +218,6 @@ fn is_intermediate(path: &Path) -> bool {
     }
 }
 
-/// -------------------------
-/// Normalize URL
-/// -------------------------
 fn normalize_url(url: &str) -> Result<String> {
     let mut normalized = url.to_string();
 
@@ -265,9 +248,6 @@ fn hash_string(s: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// -------------------------
-/// Load repos
-/// -------------------------
 fn get_repos(base: &Path) -> Result<HashMap<String, RepoInfo>> {
     let path = base.join("repos.json");
 
@@ -279,9 +259,6 @@ fn get_repos(base: &Path) -> Result<HashMap<String, RepoInfo>> {
     }
 }
 
-/// -------------------------
-/// Save repos
-/// -------------------------
 fn save_repos(base: &Path, repo_infos: &HashMap<String, RepoInfo>) -> Result<()> {
     let path = base.join("repos.json");
     let json = serde_json::to_string_pretty(repo_infos)?;
@@ -298,18 +275,16 @@ pub fn remove(urls: &Vec<String>, base: PathBuf) -> Result<()> {
     for url in urls {
         let hash = hash_string(&normalize_url(url)?);
         if let Some(_repo_info) = repo_infos.remove(&hash) {
-            println!("Deleted: {}", url);
             changed = true;
+            println!("Deleted: {}", url);
         } else {
             println!("{} doesn't exist", url);
         }
     }
     if changed {
         save_repos(&base, &repo_infos)?;
-        println!("Removed packages");
-    } else {
-        println!("Packages don't exist");
     }
+    println!("Finished");
     Ok(())
 }
 
