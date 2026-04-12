@@ -11,7 +11,6 @@ clap = { version ="4.6.0", features=["derive"]}
 dirs = "6.0.0"
 git2 = "0.20.4"
 hex = "0.4.3"
-just = "1.49.0"
 microxdg = "0.2.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
