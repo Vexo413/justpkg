@@ -28,6 +28,7 @@ enum Commands {
     Rm {
         packages: Vec<String>,
     },
+    Ls,
 }
 
 fn main() -> Result<()> {
@@ -49,6 +50,10 @@ fn main() -> Result<()> {
         }
         Some(Commands::Rm { packages }) => {
             remove(packages, base)?;
+            Ok(())
+        }
+        Some(Commands::Ls) => {
+            list(base)?;
             Ok(())
         }
         None => return Ok(()),

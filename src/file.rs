@@ -4,10 +4,11 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Command,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Result, anyhow};
+use chrono::{DateTime, Utc};
 use git2::{ObjectType, ResetType, build::RepoBuilder};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -316,6 +317,25 @@ pub fn remove(packages: &Vec<String>, base: PathBuf) -> Result<()> {
         println!("Removed packages");
     } else {
         println!("Packages don't exist");
+    }
+    Ok(())
+}
+
+fn millis_to_datetime(ms: u64) -> DateTime<Utc> {
+    let system_time = UNIX_EPOCH + Duration::from_millis(ms);
+    system_time.into()
+}
+
+pub fn list(base: PathBuf) -> Result<()> {
+    std::fs::create_dir_all(&base)?;
+    let repo_infos = get_repos(&base)?;
+    for (hash, repo_info) in repo_infos.iter() {
+        println!(
+            "{}{}{}",
+            hash,
+            repo_info.url,
+            millis_to_datetime(repo_info.fetched_at as u64)
+        );
     }
     Ok(())
 }
