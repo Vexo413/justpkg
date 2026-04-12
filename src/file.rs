@@ -7,9 +7,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
-use git2::{FetchOptions, ObjectType, ResetType, build::RepoBuilder};
+use git2::{build::RepoBuilder, FetchOptions, ObjectType, ResetType};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -25,36 +25,68 @@ pub fn add(packages: &Vec<String>, base: PathBuf) -> Result<()> {
     std::fs::create_dir_all(&base)?;
     let mut repo_infos = get_repos(&base)?;
     let mut changed = false;
+    let xdg = microxdg::Xdg::new()?;
+
     for package in packages {
         let normalized = normalize_url(&package)?;
         let hash = hash_string(&normalized);
         let repo_path = base.join(&hash);
 
-        let repo = if repo_path.exists() {
-            update(&vec![package.to_string()], base.clone())?;
-            continue;
+        if repo_path.exists() {
+            let repo = git2::Repository::open(&repo_path)?;
+            {
+                let mut remote = repo.find_remote("origin")?;
+                remote.fetch(&[] as &[&str], None, None)?;
+            }
+
+            let oid = repo.refname_to_id("refs/remotes/origin/HEAD")?;
+            let remote_obj = repo.find_object(oid, Some(ObjectType::Commit))?;
+            repo.reset(&remote_obj, ResetType::Hard, None)?;
+
+            let head_oid = repo.head()?.target().map(|v| v.to_string());
+
+            if let Some(repo_info) = repo_infos.get_mut(&hash) {
+                if repo_info.last_commit != head_oid {
+                    for binary in repo_info.binaries.iter() {
+                        let bin_path = xdg.bin()?.join(binary);
+                        if bin_path.exists() {
+                            std::fs::remove_file(bin_path)?;
+                        }
+                    }
+                    let binaries = build_repo(&repo_path)?;
+                    repo_info.binaries = binaries;
+                    repo_info.last_commit = head_oid;
+                    repo_info.fetched_at =
+                        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+                    changed = true;
+                    println!("Updated: {}", package);
+                } else {
+                    println!("{} is already up-to-date", package);
+                }
+            }
         } else {
             let mut fetch_options = FetchOptions::new();
             fetch_options.depth(1);
-            RepoBuilder::new()
+            let repo = RepoBuilder::new()
                 .fetch_options(fetch_options)
-                .clone(&package, &repo_path)?
-        };
+                .clone(&package, &repo_path)?;
 
-        let binaries = build_repo(&repo_path)?;
+            let binaries = build_repo(&repo_path)?;
 
-        let last_commit = repo.head()?.target().map(|oid| oid.to_string());
-        let repo_info = RepoInfo {
-            url: package.to_string(),
-            last_commit,
-            fetched_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
-            binaries,
-        };
+            let last_commit = repo.head()?.target().map(|oid| oid.to_string());
+            let repo_info = RepoInfo {
+                url: package.to_string(),
+                last_commit,
+                fetched_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
+                binaries,
+            };
 
-        repo_infos.insert(hash, repo_info);
-        changed = true;
-        println!("Added: {}", package);
+            repo_infos.insert(hash, repo_info);
+            changed = true;
+            println!("Added: {}", package);
+        }
     }
+
     if changed {
         save_repos(&base, &repo_infos)?;
     }
@@ -189,27 +221,36 @@ pub fn update(packages: &Vec<String>, base: PathBuf) -> Result<()> {
 }
 
 fn build_just(repo_path: &Path) -> Result<Vec<PathBuf>> {
-    Command::new("just")
+    let status = Command::new("just")
         .arg("build")
         .current_dir(repo_path)
         .status()?;
+    if !status.success() {
+        return Err(anyhow!("just build failed"));
+    }
     find_binaries_in_dir(repo_path)
 }
 
 fn build_make(repo_path: &Path) -> Result<Vec<PathBuf>> {
-    Command::new("make")
+    let status = Command::new("make")
         .arg("build")
         .current_dir(repo_path)
         .status()?;
+    if !status.success() {
+        return Err(anyhow!("make build failed"));
+    }
     find_binaries_in_dir(repo_path)
 }
 
 fn build_cargo(repo_path: &Path) -> Result<Vec<PathBuf>> {
-    Command::new("cargo")
+    let status = Command::new("cargo")
         .arg("build")
         .arg("--release")
         .current_dir(repo_path)
         .status()?;
+    if !status.success() {
+        return Err(anyhow!("cargo build failed"));
+    }
 
     let release_dir = repo_path.join("target/release");
     if release_dir.exists() {
@@ -220,12 +261,24 @@ fn build_cargo(repo_path: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn build_cmake(repo_path: &Path) -> Result<Vec<PathBuf>> {
+    let build_dir = repo_path.join("build");
+    if !build_dir.exists() {
+        fs::create_dir_all(&build_dir)?;
+        Command::new("cmake")
+            .arg("-S")
+            .arg(repo_path)
+            .arg("-B")
+            .arg(&build_dir)
+            .current_dir(repo_path)
+            .status()?;
+    }
+
     Command::new("cmake")
         .arg("--build")
-        .arg(".")
-        .current_dir(repo_path)
+        .arg(&build_dir)
+        .current_dir(&build_dir)
         .status()?;
-    find_binaries_in_dir(repo_path)
+    find_binaries_in_dir(&build_dir)
 }
 
 fn find_binaries_in_dir(dir: &Path) -> Result<Vec<PathBuf>> {
