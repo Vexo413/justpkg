@@ -293,7 +293,6 @@ pub fn remove(urls: &Vec<String>, base: PathBuf) -> Result<()> {
     let mut changed = false;
     let xdg = microxdg::Xdg::new()?;
 
-    println!("Removing...");
     for url in urls {
         let hash = hash_string(&normalize_url(url)?);
         if let Some(repo_info) = repo_infos.remove(&hash) {
