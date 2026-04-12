@@ -122,7 +122,10 @@ pub fn update(urls: &Vec<String>, base: PathBuf) -> Result<()> {
             let head_oid = repo.head()?.target().map(|v| v.to_string());
             if repo_info.last_commit != head_oid {
                 for binary in repo_info.binaries.iter() {
-                    std::fs::remove_file(xdg.bin()?.join(binary))?;
+                    let bin_path = xdg.bin()?.join(binary);
+                    if bin_path.exists() {
+                        std::fs::remove_file(bin_path)?;
+                    }
                 }
                 let binaries = build_repo(&base.join(hash))?;
                 repo_info.binaries = binaries;
@@ -155,7 +158,10 @@ pub fn update(urls: &Vec<String>, base: PathBuf) -> Result<()> {
                 let head_oid = repo.head()?.target().map(|v| v.to_string());
                 if repo_info.last_commit != head_oid {
                     for binary in repo_info.binaries.iter() {
-                        std::fs::remove_file(xdg.bin()?.join(binary))?;
+                        let bin_path = xdg.bin()?.join(binary);
+                        if bin_path.exists() {
+                            std::fs::remove_file(bin_path)?;
+                        }
                     }
                     let binaries = build_repo(&base.join(hash))?;
                     repo_info.binaries = binaries;
@@ -296,9 +302,15 @@ pub fn remove(urls: &Vec<String>, base: PathBuf) -> Result<()> {
     for url in urls {
         let hash = hash_string(&normalize_url(url)?);
         if let Some(repo_info) = repo_infos.remove(&hash) {
-            std::fs::remove_dir_all(base.join(hash))?;
+            let repo_path = base.join(&hash);
+            if repo_path.exists() {
+                std::fs::remove_dir_all(repo_path)?;
+            }
             for binary in repo_info.binaries {
-                std::fs::remove_file(xdg.bin()?.join(binary))?;
+                let bin_path = xdg.bin()?.join(binary);
+                if bin_path.exists() {
+                    std::fs::remove_file(bin_path)?;
+                }
             }
             changed = true;
             println!("Deleted: {}", url);
