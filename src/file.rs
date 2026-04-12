@@ -21,31 +21,31 @@ pub struct RepoInfo {
     pub binaries: Vec<String>,
 }
 
-pub fn add(urls: &Vec<String>, base: PathBuf) -> Result<()> {
+pub fn add(packages: &Vec<String>, base: PathBuf) -> Result<()> {
     std::fs::create_dir_all(&base)?;
     let mut repo_infos = get_repos(&base)?;
     let mut changed = false;
-    for url in urls {
-        let normalized = normalize_url(&url)?;
+    for package in packages {
+        let normalized = normalize_url(&package)?;
         let hash = hash_string(&normalized);
         let repo_path = base.join(&hash);
 
         let repo = if repo_path.exists() {
-            update(&vec![url.to_string()], base)?;
+            update(&vec![package.to_string()], base.clone())?;
             return Ok(());
         } else {
             let mut fetch_options = FetchOptions::new();
             fetch_options.depth(1);
             RepoBuilder::new()
                 .fetch_options(fetch_options)
-                .clone(&url, &repo_path)?
+                .clone(&package, &repo_path)?
         };
 
         let binaries = build_repo(&repo_path)?;
 
         let last_commit = repo.head()?.target().map(|oid| oid.to_string());
         let repo_info = RepoInfo {
-            url: url.to_string(),
+            url: package.to_string(),
             last_commit,
             fetched_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
             binaries,
@@ -53,7 +53,7 @@ pub fn add(urls: &Vec<String>, base: PathBuf) -> Result<()> {
 
         repo_infos.insert(hash, repo_info);
         changed = true;
-        println!("Added: {}", url);
+        println!("Added: {}", package);
     }
     if changed {
         save_repos(&base, &repo_infos)?;
@@ -100,13 +100,13 @@ pub fn build_repo(repo_path: &Path) -> Result<Vec<String>> {
         .collect::<Result<Vec<String>>>()?)
 }
 
-pub fn update(urls: &Vec<String>, base: PathBuf) -> Result<()> {
+pub fn update(packages: &Vec<String>, base: PathBuf) -> Result<()> {
     let mut changed = false;
     std::fs::create_dir_all(&base)?;
     let mut repo_infos = get_repos(&base)?;
     let xdg = microxdg::Xdg::new()?;
 
-    if urls.is_empty() {
+    if packages.is_empty() {
         for (hash, repo_info) in repo_infos.iter_mut() {
             let repo = git2::Repository::open(base.join(hash))?;
             {
@@ -141,8 +141,14 @@ pub fn update(urls: &Vec<String>, base: PathBuf) -> Result<()> {
         }
         println!("Finished");
     } else {
-        for url in urls {
-            let hash = hash_string(&normalize_url(url)?);
+        for package in packages {
+            let hash = if let Some(h) = resolve_package(package, &repo_infos)? {
+                h
+            } else {
+                println!("{} not found", package);
+                continue;
+            };
+
             if let Some(repo_info) = repo_infos.get_mut(&hash) {
                 let repo = git2::Repository::open(base.join(&hash))?;
                 {
@@ -293,14 +299,20 @@ fn save_repos(base: &Path, repo_infos: &HashMap<String, RepoInfo>) -> Result<()>
     Ok(())
 }
 
-pub fn remove(urls: &Vec<String>, base: PathBuf) -> Result<()> {
+pub fn remove(packages: &Vec<String>, base: PathBuf) -> Result<()> {
     std::fs::create_dir_all(&base)?;
     let mut repo_infos = get_repos(&base)?;
     let mut changed = false;
     let xdg = microxdg::Xdg::new()?;
 
-    for url in urls {
-        let hash = hash_string(&normalize_url(url)?);
+    for package in packages {
+        let hash = if let Some(h) = resolve_package(package, &repo_infos)? {
+            h
+        } else {
+            println!("{} not found", package);
+            continue;
+        };
+
         if let Some(repo_info) = repo_infos.remove(&hash) {
             let repo_path = base.join(&hash);
             if repo_path.exists() {
@@ -313,9 +325,7 @@ pub fn remove(urls: &Vec<String>, base: PathBuf) -> Result<()> {
                 }
             }
             changed = true;
-            println!("Deleted: {}", url);
-        } else {
-            println!("{} doesn't exist", url);
+            println!("Deleted: {}", package);
         }
     }
     if changed {
@@ -344,12 +354,19 @@ pub fn list(base: PathBuf) -> Result<()> {
     }
     Ok(())
 }
-pub fn info(urls: &Vec<String>, base: PathBuf) -> Result<()> {
+
+pub fn info(packages: &Vec<String>, base: PathBuf) -> Result<()> {
     std::fs::create_dir_all(&base)?;
     let repo_infos = get_repos(&base)?;
 
-    for url in urls {
-        let hash = hash_string(&normalize_url(url)?);
+    for package in packages {
+        let hash = if let Some(h) = resolve_package(package, &repo_infos)? {
+            h
+        } else {
+            println!("{} not found", package);
+            continue;
+        };
+
         if let Some(repo_info) = repo_infos.get(&hash) {
             println!("{}", hash);
             println!("Url: {}", repo_info.url);
@@ -361,4 +378,38 @@ pub fn info(urls: &Vec<String>, base: PathBuf) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn resolve_package(input: &str, repo_infos: &HashMap<String, RepoInfo>) -> Result<Option<String>> {
+    // 1. Is it a URL?
+    if input.contains("://") || input.contains("git@") || input.contains("github.com") {
+        let normalized = normalize_url(input)?;
+        let hash = hash_string(&normalized);
+        if repo_infos.contains_key(&hash) {
+            return Ok(Some(hash));
+        }
+    }
+
+    // 2. Is it any of the binaries names?
+    for (hash, info) in repo_infos {
+        if info.binaries.iter().any(|b| b == input) {
+            return Ok(Some(hash.clone()));
+        }
+    }
+
+    // 3. Matches the hash (prefix matching)
+    let mut matches = Vec::new();
+    for hash in repo_infos.keys() {
+        if hash.starts_with(input) {
+            matches.push(hash.clone());
+        }
+    }
+
+    if matches.len() == 1 {
+        return Ok(Some(matches[0].clone()));
+    } else if matches.len() > 1 {
+        return Err(anyhow!("Ambiguous package identifier: {}", input));
+    }
+
+    Ok(None)
 }

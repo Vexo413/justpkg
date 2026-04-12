@@ -20,21 +20,21 @@ struct Cli {
 enum Commands {
     /// Adds a package
     Add {
-        urls: Vec<String>,
+        packages: Vec<String>,
     },
     /// Updates packages
     Update {
-        urls: Vec<String>,
+        packages: Vec<String>,
     },
     /// Removes packages
     Rm {
-        urls: Vec<String>,
+        packages: Vec<String>,
     },
     /// Lists packages
     Ls,
 
     Info {
-        urls: Vec<String>,
+        packages: Vec<String>,
     },
 }
 
@@ -47,24 +47,24 @@ fn main() -> Result<()> {
 
     let base = microxdg::Xdg::new()?.data()?.join("justpkg");
     match &cli.command {
-        Some(Commands::Add { urls }) => {
-            add(urls, base)?;
+        Some(Commands::Add { packages }) => {
+            add(packages, base)?;
             Ok(())
         }
-        Some(Commands::Update { urls }) => {
-            update(urls, base)?;
+        Some(Commands::Update { packages }) => {
+            update(packages, base)?;
             Ok(())
         }
-        Some(Commands::Rm { urls }) => {
-            remove(urls, base)?;
+        Some(Commands::Rm { packages }) => {
+            remove(packages, base)?;
             Ok(())
         }
         Some(Commands::Ls) => {
             list(base)?;
             Ok(())
         }
-        Some(Commands::Info { urls }) => {
-            info(&urls, base)?;
+        Some(Commands::Info { packages }) => {
+            info(&packages, base)?;
             Ok(())
         }
         None => return Ok(()),
