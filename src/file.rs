@@ -93,12 +93,12 @@ pub fn build_repo(repo_path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn update(packages: &Vec<String>, base: PathBuf) -> Result<()> {
+pub fn update(urls: &Vec<String>, base: PathBuf) -> Result<()> {
     let mut changed = false;
     std::fs::create_dir_all(&base)?;
 
     let mut repo_infos = get_repos(&base)?;
-    if packages.is_empty() {
+    if urls.is_empty() {
         println!("Updating all...");
 
         for (hash, repo_info) in repo_infos.iter_mut() {
@@ -131,8 +131,8 @@ pub fn update(packages: &Vec<String>, base: PathBuf) -> Result<()> {
         }
     } else {
         println!("Updating...");
-        for package in packages {
-            let hash = hash_string(&normalize_url(package)?);
+        for url in urls {
+            let hash = hash_string(&normalize_url(url)?);
             if let Some(repo_info) = repo_infos.get_mut(&hash) {
                 let repo = git2::Repository::open(base.join(&hash))?;
                 {
@@ -290,19 +290,19 @@ fn save_repos(base: &Path, repo_infos: &HashMap<String, RepoInfo>) -> Result<()>
     Ok(())
 }
 
-pub fn remove(packages: &Vec<String>, base: PathBuf) -> Result<()> {
+pub fn remove(urls: &Vec<String>, base: PathBuf) -> Result<()> {
     std::fs::create_dir_all(&base)?;
     let mut repo_infos = get_repos(&base)?;
     let mut changed = false;
 
     println!("Removing...");
-    for package in packages {
-        let hash = hash_string(&normalize_url(package)?);
+    for url in urls {
+        let hash = hash_string(&normalize_url(url)?);
         if let Some(_repo_info) = repo_infos.remove(&hash) {
-            println!("Deleted: {}", package);
+            println!("Deleted: {}", url);
             changed = true;
         } else {
-            println!("{} doesn't exist", package);
+            println!("{} doesn't exist", url);
         }
     }
     if changed {

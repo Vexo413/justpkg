@@ -18,16 +18,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// does testing things
-    Add {
-        url: String,
-    },
-    Update {
-        packages: Vec<String>,
-    },
-    Rm {
-        packages: Vec<String>,
-    },
+    /// Adds a package
+    Add { url: String },
+    /// Updates packages
+    Update { urls: Vec<String> },
+    /// Removes packages
+    Rm { urls: Vec<String> },
+    /// Lists packages
     Ls,
 }
 
@@ -44,11 +41,11 @@ fn main() -> Result<()> {
             add(url, base)?;
             Ok(())
         }
-        Some(Commands::Update { packages }) => {
+        Some(Commands::Update { urls: packages }) => {
             update(packages, base)?;
             Ok(())
         }
-        Some(Commands::Rm { packages }) => {
+        Some(Commands::Rm { urls: packages }) => {
             remove(packages, base)?;
             Ok(())
         }
