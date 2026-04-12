@@ -130,6 +130,7 @@ pub fn update(packages: &Vec<String>, base: PathBuf) -> Result<()> {
                 let binaries = build_repo(&base.join(hash))?;
                 repo_info.binaries = binaries;
                 repo_info.last_commit = head_oid;
+                repo_info.fetched_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
                 changed = true;
                 println!("Updated: {}", repo_info.url);
             } else {
