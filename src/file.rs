@@ -61,7 +61,6 @@ pub fn add(url: &str, base: PathBuf) -> Result<()> {
 /// Build repo + install binaries
 /// -------------------------
 pub fn build_repo(repo_path: &Path) -> Result<()> {
-    let hash = repo_path.file_name().expect("Genuinely, WTF are you doing");
     let justfile = repo_path.join("justfile");
     let makefile = repo_path.join("Makefile");
     let cargo_toml = repo_path.join("Cargo.toml");
@@ -80,13 +79,14 @@ pub fn build_repo(repo_path: &Path) -> Result<()> {
     };
 
     // install step
-    let bin_dir = microxdg::Xdg::new()?.bin()?.join(hash);
+    let bin_dir = microxdg::Xdg::new()?.bin()?;
     fs::create_dir_all(&bin_dir)?;
 
     for binary in binaries {
         if let Some(name) = binary.file_name() {
             let dest = bin_dir.join(name);
-            fs::copy(&binary, &dest)?;
+            // fs::copy(&binary, &dest)?;
+            fs::hard_link(&binary, &dest)?;
         }
     }
     Ok(())
@@ -305,7 +305,6 @@ pub fn remove(packages: &Vec<String>, base: PathBuf) -> Result<()> {
     for package in packages {
         let hash = hash_string(&normalize_url(package)?);
         if let Some(_repo_info) = repo_infos.remove(&hash) {
-            std::fs::remove_dir_all(base.join(hash))?;
             println!("Deleted: {}", package);
             changed = true;
         } else {
