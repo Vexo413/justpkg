@@ -18,6 +18,7 @@ pub struct RepoInfo {
     pub url: String,
     pub last_commit: Option<String>,
     pub fetched_at: u128,
+    pub binaries: Vec<String>,
 }
 
 pub fn add(urls: &Vec<String>, base: PathBuf) -> Result<()> {
@@ -36,13 +37,14 @@ pub fn add(urls: &Vec<String>, base: PathBuf) -> Result<()> {
             RepoBuilder::new().clone(&url, &repo_path)?
         };
 
-        build_repo(&repo_path)?;
+        let binaries = build_repo(&repo_path)?;
 
         let last_commit = repo.head()?.target().map(|oid| oid.to_string());
         let repo_info = RepoInfo {
             url: url.to_string(),
             last_commit,
             fetched_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
+            binaries,
         };
 
         repo_infos.insert(hash, repo_info);
@@ -56,7 +58,7 @@ pub fn add(urls: &Vec<String>, base: PathBuf) -> Result<()> {
     Ok(())
 }
 
-pub fn build_repo(repo_path: &Path) -> Result<()> {
+pub fn build_repo(repo_path: &Path) -> Result<Vec<String>> {
     let justfile = repo_path.join("justfile");
     let makefile = repo_path.join("Makefile");
     let cargo_toml = repo_path.join("Cargo.toml");
@@ -74,18 +76,24 @@ pub fn build_repo(repo_path: &Path) -> Result<()> {
         return Err(anyhow!("No supported build system found"));
     };
 
-    // install step
     let bin_dir = microxdg::Xdg::new()?.bin()?;
     fs::create_dir_all(&bin_dir)?;
 
-    for binary in binaries {
+    for binary in binaries.iter() {
         if let Some(name) = binary.file_name() {
             let dest = bin_dir.join(name);
             let _ = fs::remove_file(&dest);
-            fs::hard_link(&binary, &dest)?;
+            std::os::unix::fs::symlink(&binary, &dest)?;
         }
     }
-    Ok(())
+    Ok(binaries
+        .iter()
+        .map(|path| {
+            let v = path.file_name().ok_or(anyhow!("Not a file"))?;
+            let v2 = v.to_string_lossy().to_string();
+            Ok(v2)
+        })
+        .collect::<Result<Vec<String>>>()?)
 }
 
 pub fn update(urls: &Vec<String>, base: PathBuf) -> Result<()> {
@@ -270,11 +278,16 @@ pub fn remove(urls: &Vec<String>, base: PathBuf) -> Result<()> {
     std::fs::create_dir_all(&base)?;
     let mut repo_infos = get_repos(&base)?;
     let mut changed = false;
+    let xdg = microxdg::Xdg::new()?;
 
     println!("Removing...");
     for url in urls {
         let hash = hash_string(&normalize_url(url)?);
-        if let Some(_repo_info) = repo_infos.remove(&hash) {
+        if let Some(repo_info) = repo_infos.remove(&hash) {
+            std::fs::remove_dir_all(xdg.data()?.join(hash))?;
+            for binary in repo_info.binaries {
+                std::fs::remove_file(xdg.bin()?.join(binary))?;
+            }
             changed = true;
             println!("Deleted: {}", url);
         } else {
