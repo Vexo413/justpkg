@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
-use git2::{ObjectType, ResetType, build::RepoBuilder};
+use git2::{FetchOptions, ObjectType, ResetType, build::RepoBuilder};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -34,7 +34,11 @@ pub fn add(urls: &Vec<String>, base: PathBuf) -> Result<()> {
             update(&vec![url.to_string()], base)?;
             return Ok(());
         } else {
-            RepoBuilder::new().clone(&url, &repo_path)?
+            let mut fetch_options = FetchOptions::new();
+            fetch_options.depth(1);
+            RepoBuilder::new()
+                .fetch_options(fetch_options)
+                .clone(&url, &repo_path)?
         };
 
         let binaries = build_repo(&repo_path)?;
@@ -99,8 +103,9 @@ pub fn build_repo(repo_path: &Path) -> Result<Vec<String>> {
 pub fn update(urls: &Vec<String>, base: PathBuf) -> Result<()> {
     let mut changed = false;
     std::fs::create_dir_all(&base)?;
-
     let mut repo_infos = get_repos(&base)?;
+    let xdg = microxdg::Xdg::new()?;
+
     if urls.is_empty() {
         for (hash, repo_info) in repo_infos.iter_mut() {
             let repo = git2::Repository::open(base.join(hash))?;
@@ -116,7 +121,11 @@ pub fn update(urls: &Vec<String>, base: PathBuf) -> Result<()> {
 
             let head_oid = repo.head()?.target().map(|v| v.to_string());
             if repo_info.last_commit != head_oid {
-                build_repo(&base.join(hash))?;
+                for binary in repo_info.binaries.iter() {
+                    std::fs::remove_file(xdg.bin()?.join(binary))?;
+                }
+                let binaries = build_repo(&base.join(hash))?;
+                repo_info.binaries = binaries;
                 repo_info.last_commit = head_oid;
                 changed = true;
                 println!("Updated: {}", repo_info.url);
@@ -145,7 +154,11 @@ pub fn update(urls: &Vec<String>, base: PathBuf) -> Result<()> {
 
                 let head_oid = repo.head()?.target().map(|v| v.to_string());
                 if repo_info.last_commit != head_oid {
-                    build_repo(&base.join(hash))?;
+                    for binary in repo_info.binaries.iter() {
+                        std::fs::remove_file(xdg.bin()?.join(binary))?;
+                    }
+                    let binaries = build_repo(&base.join(hash))?;
+                    repo_info.binaries = binaries;
                     repo_info.last_commit = head_oid;
                     changed = true;
                     println!("Updated: {}", repo_info.url);
