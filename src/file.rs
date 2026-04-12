@@ -20,41 +20,40 @@ pub struct RepoInfo {
     pub fetched_at: u128,
 }
 
-/// -------------------------
-/// Add repo
-/// -------------------------
-pub fn add(url: &str, base: PathBuf) -> Result<()> {
+pub fn add(urls: &Vec<String>, base: PathBuf) -> Result<()> {
     std::fs::create_dir_all(&base)?;
+    let mut repo_infos = get_repos(&base)?;
+    let mut changed = false;
+    println!("Adding");
+    for url in urls {
+        let normalized = normalize_url(&url)?;
+        let hash = hash_string(&normalized);
+        let repo_path = base.join(&hash);
 
-    let mut repos = get_repos(&base)?;
+        let repo = if repo_path.exists() {
+            update(&vec![url.to_string()], base)?;
+            return Ok(());
+        } else {
+            RepoBuilder::new().clone(&url, &repo_path)?
+        };
 
-    // 1. Normalize then hash
-    let normalized = normalize_url(url)?;
-    let hash = hash_string(&normalized);
-    let repo_path = base.join(&hash);
+        build_repo(&repo_path)?;
+        println!("Built: {}", url);
 
-    // 2. Clone/Open repo
-    let repo = if repo_path.exists() {
-        update(&vec![url.to_string()], base)?;
-        return Ok(());
-    } else {
-        RepoBuilder::new().clone(url, &repo_path)?
-    };
+        let last_commit = repo.head()?.target().map(|oid| oid.to_string());
+        let repo_info = RepoInfo {
+            url: url.to_string(),
+            last_commit,
+            fetched_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
+        };
 
-    // 3. Build
-    build_repo(&repo_path)?;
-    println!("Built: {}", url);
-    // 4. Capture current state
-    let last_commit = repo.head()?.target().map(|oid| oid.to_string());
-    let repo_info = RepoInfo {
-        url: url.to_string(),
-        last_commit,
-        fetched_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
-    };
-
-    repos.insert(hash, repo_info);
-    save_repos(&base, &repos)?;
-
+        repo_infos.insert(hash, repo_info);
+        changed = true;
+    }
+    if changed {
+        save_repos(&base, &repo_infos)?;
+        println!("Added packages");
+    }
     Ok(())
 }
 
