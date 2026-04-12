@@ -86,6 +86,7 @@ pub fn build_repo(repo_path: &Path) -> Result<()> {
     for binary in binaries {
         if let Some(name) = binary.file_name() {
             let dest = bin_dir.join(name);
+            dbg!(&binary, &dest);
             // fs::copy(&binary, &dest)?;
             fs::hard_link(&binary, &dest)?;
         }
