@@ -1,6 +1,7 @@
-mod file;
+mod build;
+mod commands;
 
-use crate::file::*;
+use crate::commands::*;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
