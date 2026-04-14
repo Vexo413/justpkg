@@ -10,7 +10,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-pub fn rebuild(base: &PathBuf, hash: &str, repo_info: &mut RepoInfo) -> Result<bool> {
+pub fn rebuild(base: &Path, hash: &str, repo_info: &mut RepoInfo) -> Result<bool> {
     let xdg = Xdg::new()?;
 
     let repo = git2::Repository::open(base.join(hash))?;

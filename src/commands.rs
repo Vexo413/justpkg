@@ -12,14 +12,29 @@ use std::{
 };
 
 #[derive(Serialize, Deserialize, Clone)]
+enum BuildMethod {
+    Script {
+        script_path: PathBuf,
+        binary_path: PathBuf,
+    },
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 pub struct RepoInfo {
     pub url: String,
     pub last_commit: Option<String>,
     pub fetched_at: u128,
     pub binaries: Vec<String>,
+    pub build_method: BuildMethod,
 }
 
-pub fn add(packages: &Vec<String>, base: PathBuf) -> Result<()> {
+pub fn add(
+    packages: &Vec<String>,
+    base: &Path,
+    script: Option<&Path>,
+    command: Option<&str>,
+    binary: Option<&Path>,
+) -> Result<()> {
     std::fs::create_dir_all(&base)?;
     let mut repo_infos = get_repos(&base)?;
     let mut changed = false;
@@ -31,7 +46,7 @@ pub fn add(packages: &Vec<String>, base: PathBuf) -> Result<()> {
 
         if repo_path.exists() {
             if let Some(repo_info) = repo_infos.get_mut(&hash) {
-                match rebuild(&base, &hash, repo_info) {
+                match rebuild(base, &hash, repo_info) {
                     Ok(c) => {
                         if c {
                             changed = true;
@@ -72,7 +87,7 @@ pub fn add(packages: &Vec<String>, base: PathBuf) -> Result<()> {
     Ok(())
 }
 
-pub fn update(packages: &Vec<String>, base: PathBuf) -> Result<()> {
+pub fn update(packages: &Vec<String>, base: &Path) -> Result<()> {
     let mut changed = false;
     std::fs::create_dir_all(&base)?;
     let mut repo_infos = get_repos(&base)?;
@@ -172,7 +187,7 @@ fn save_repos(base: &Path, repo_infos: &HashMap<String, RepoInfo>) -> Result<()>
     Ok(())
 }
 
-pub fn remove(packages: &Vec<String>, base: PathBuf) -> Result<()> {
+pub fn remove(packages: &Vec<String>, base: &Path) -> Result<()> {
     std::fs::create_dir_all(&base)?;
     let mut repo_infos = get_repos(&base)?;
     let mut changed = false;
@@ -213,7 +228,7 @@ fn millis_to_datetime(ms: u64) -> DateTime<Utc> {
     system_time.into()
 }
 
-pub fn list(base: PathBuf) -> Result<()> {
+pub fn list(base: &Path) -> Result<()> {
     std::fs::create_dir_all(&base)?;
     let repo_infos = get_repos(&base)?;
     for (hash, repo_info) in repo_infos.iter() {
@@ -228,7 +243,7 @@ pub fn list(base: PathBuf) -> Result<()> {
     Ok(())
 }
 
-pub fn info(packages: &Vec<String>, base: PathBuf) -> Result<()> {
+pub fn info(packages: &Vec<String>, base: &Path) -> Result<()> {
     std::fs::create_dir_all(&base)?;
     let repo_infos = get_repos(&base)?;
 
