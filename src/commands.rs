@@ -66,7 +66,7 @@ pub fn add(
         save_repos(&repo_infos)?;
     }
 
-    build()?;
+    rebuild()?;
 
     Ok(())
 }
@@ -137,7 +137,7 @@ pub fn update(packages: Vec<String>) -> Result<()> {
 
     if changed {
         save_repos(&repo_infos)?;
-        build()?;
+        rebuild()?;
     }
 
     println!("Finished");
@@ -175,7 +175,7 @@ fn hash_string(s: &str) -> String {
 }
 
 fn get_packages() -> Result<HashMap<String, Package>> {
-    let config_path = Xdg::new()?.config()?;
+    let config_path = Xdg::new()?.config()?.join("justpkg");
     let path = config_path.join("repos.json");
 
     if path.exists() {
@@ -187,7 +187,7 @@ fn get_packages() -> Result<HashMap<String, Package>> {
 }
 
 fn save_repos(repo_infos: &HashMap<String, Package>) -> Result<()> {
-    let config_path = Xdg::new()?.config()?;
+    let config_path = Xdg::new()?.config()?.join("justpkg");
     let path = config_path.join("repos.json");
     let json = serde_json::to_string_pretty(repo_infos)?;
     fs::write(path, json)?;
@@ -210,7 +210,7 @@ pub fn remove(packages: Vec<String>) -> Result<()> {
 
     if changed {
         save_repos(&repo_infos)?;
-        build()?;
+        rebuild()?;
     }
 
     println!("Finished");
@@ -296,7 +296,7 @@ fn resolve_package(input: &str, repo_infos: &HashMap<String, Package>) -> Result
     Ok(None)
 }
 
-pub fn build() -> Result<()> {
+pub fn rebuild() -> Result<()> {
     let packages = get_packages()?;
     let xdg = Xdg::new()?;
 

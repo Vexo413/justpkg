@@ -1,4 +1,3 @@
-mod build;
 mod commands;
 
 use crate::commands::*;
@@ -19,6 +18,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Rebuild from config
+    Rebuild,
     /// Adds a package
     Add {
         package: String,
@@ -54,6 +55,10 @@ fn main() -> Result<()> {
     }
 
     match cli.command {
+        Some(Commands::Rebuild) => {
+            rebuild()?;
+            Ok(())
+        }
         Some(Commands::Add {
             package,
             build_script,
