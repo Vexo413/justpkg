@@ -1,3 +1,4 @@
+mod build;
 mod commands;
 
 use crate::commands::*;
