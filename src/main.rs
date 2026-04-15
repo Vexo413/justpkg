@@ -22,7 +22,7 @@ enum Commands {
     /// Adds a package
     Add {
         package: String,
-        command: String,
+        build_script: PathBuf,
         #[arg(required = true)]
         binaries: Vec<PathBuf>,
     },
@@ -54,10 +54,10 @@ fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Add {
             package,
-            command,
+            build_script,
             binaries,
         }) => {
-            add(package, &base, command, binaries)?;
+            add(package, build_script, binaries)?;
             Ok(())
         }
         Some(Commands::Update { packages }) => {

@@ -1,80 +1,103 @@
 use crate::build::{build_repo, install_binaries, rebuild};
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
-use git2::{FetchOptions, build::RepoBuilder};
+use git2::{FetchOptions, Oid, RemoteCallbacks, build::RepoBuilder};
+use microxdg::Xdg;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::{self, File},
     path::{Path, PathBuf},
+    process::{Command, ExitStatus},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-#[derive(Serialize, Deserialize, Clone)]
-pub struct RepoInfo {
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct Package {
     pub url: String,
-    pub last_commit: Option<String>,
+    pub commit: String,
     pub fetched_at: u128,
+    pub build_script: PathBuf,
     pub binaries: Vec<PathBuf>,
-    pub command: String,
 }
 
-pub fn add(package: String, base: &Path, command: String, binaries: Vec<PathBuf>) -> Result<()> {
-    std::fs::create_dir_all(base)?;
-    let mut repo_infos = get_repos(base)?;
-    let mut changed = false;
+pub fn add(package: String, build_script: PathBuf, binaries: Vec<PathBuf>) -> Result<()> {
+    let xdg = Xdg::new()?;
+    let justpkg_data = xdg.data()?.join("justpkg");
+    std::fs::create_dir_all(justpkg_data)?;
+
+    let mut repo_infos = get_packages()?;
 
     let normalized = normalize_url(&package)?;
     let hash = hash_string(&normalized);
-    let repo_path = base.join(&hash);
 
-    if repo_path.exists() {
-        if let Some(repo_info) = repo_infos.get_mut(&hash) {
-            match rebuild(base, &hash, repo_info) {
-                Ok(c) => {
-                    if c {
-                        changed = true;
-                    }
-                }
-                Err(e) => {
-                    return Err(e);
-                }
-            }
-        }
-    } else {
-        let mut fetch_options = FetchOptions::new();
-        fetch_options.depth(1);
-        let repo = RepoBuilder::new()
-            .fetch_options(fetch_options)
-            .clone(&package, &repo_path)?;
+    let entry = Package {
+        commit: resolve_remote_ref(&package, "HEAD")?.to_string(),
+        url: package,
+        fetched_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
+        binaries,
+        build_script,
+    };
 
-        build_repo(&repo_path, &command)?;
-        install_binaries(&repo_path, &binaries)?;
-        let last_commit = repo.head()?.target().map(|oid| oid.to_string());
-        let repo_info = RepoInfo {
-            url: package.to_string(),
-            last_commit,
-            fetched_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
-            binaries,
-            command,
-        };
-
-        repo_infos.insert(hash, repo_info);
-        changed = true;
-        println!("Added: {}", package);
-    }
+    let changed = match repo_infos.get(&hash) {
+        Some(old) => old != &entry,
+        None => true,
+    };
 
     if changed {
-        save_repos(base, &repo_infos)?;
+        repo_infos.insert(hash, entry);
+        save_repos(&repo_infos)?;
     }
-    println!("Finished");
+
+    build()?;
+
     Ok(())
+}
+
+pub fn resolve_remote_ref(url: &str, r: &str) -> Result<Oid> {
+    let repo = git2::Repository::init_bare(std::path::Path::new("/tmp/git2-temp"))?;
+
+    let mut remote = repo.remote_anonymous(url)?;
+
+    let mut fetch_opts = FetchOptions::new();
+    let callbacks = RemoteCallbacks::new();
+
+    fetch_opts.remote_callbacks(callbacks);
+
+    remote.fetch(
+        &[
+            "refs/heads/*:refs/remotes/origin/*",
+            "refs/tags/*:refs/tags/*",
+        ],
+        Some(&mut fetch_opts),
+        None,
+    )?;
+
+    if r == "HEAD" {
+        let head = repo.find_reference("refs/remotes/origin/HEAD")?;
+        return Ok(head
+            .resolve()?
+            .target()
+            .ok_or_else(|| anyhow!("invalid HEAD"))?);
+    }
+
+    let branch = format!("refs/remotes/origin/{}", r);
+    if let Ok(reference) = repo.find_reference(&branch) {
+        return Ok(reference.target().ok_or_else(|| anyhow!("no target"))?);
+    }
+
+    let tag = format!("refs/tags/{}", r);
+    if let Ok(reference) = repo.find_reference(&tag) {
+        return Ok(reference.target().ok_or_else(|| anyhow!("no tag target"))?);
+    }
+
+    Err(anyhow!("ref not found: {}", r))
 }
 
 fn update_package(
     base: &Path,
-    repo_infos: &mut HashMap<String, RepoInfo>,
+    repo_infos: &mut HashMap<String, Package>,
     package: &str,
 ) -> Result<()> {
     let hash =
@@ -90,7 +113,7 @@ fn update_package(
 
 pub fn update(packages: Vec<String>, base: PathBuf) -> Result<()> {
     std::fs::create_dir_all(&base)?;
-    let mut repo_infos = get_repos(&base)?;
+    let mut repo_infos = get_packages(&base)?;
     let mut changed = false;
 
     if packages.is_empty() {
@@ -154,8 +177,9 @@ fn hash_string(s: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-fn get_repos(base: &Path) -> Result<HashMap<String, RepoInfo>> {
-    let path = base.join("repos.json");
+fn get_packages() -> Result<HashMap<String, Package>> {
+    let config_path = Xdg::new()?.config()?;
+    let path = config_path.join("repos.json");
 
     if path.exists() {
         let file = File::open(&path)?;
@@ -165,8 +189,9 @@ fn get_repos(base: &Path) -> Result<HashMap<String, RepoInfo>> {
     }
 }
 
-fn save_repos(base: &Path, repo_infos: &HashMap<String, RepoInfo>) -> Result<()> {
-    let path = base.join("repos.json");
+fn save_repos(repo_infos: &HashMap<String, Package>) -> Result<()> {
+    let config_path = Xdg::new()?.config()?;
+    let path = config_path.join("repos.json");
     let json = serde_json::to_string_pretty(repo_infos)?;
     fs::write(path, json)?;
     Ok(())
@@ -174,7 +199,7 @@ fn save_repos(base: &Path, repo_infos: &HashMap<String, RepoInfo>) -> Result<()>
 
 fn remove_package(
     base: &Path,
-    repo_infos: &mut HashMap<String, RepoInfo>,
+    repo_infos: &mut HashMap<String, Package>,
     package: &str,
 ) -> Result<()> {
     let hash =
@@ -209,7 +234,7 @@ fn remove_package(
 
 pub fn remove(packages: Vec<String>, base: PathBuf) -> Result<()> {
     std::fs::create_dir_all(&base)?;
-    let mut repo_infos = get_repos(&base)?;
+    let mut repo_infos = get_packages(&base)?;
     let mut changed = false;
 
     for package in packages {
@@ -235,7 +260,7 @@ fn millis_to_datetime(ms: u64) -> DateTime<Utc> {
 
 pub fn list(base: PathBuf) -> Result<()> {
     std::fs::create_dir_all(&base)?;
-    let repo_infos = get_repos(&base)?;
+    let repo_infos = get_packages(&base)?;
     for (hash, repo_info) in repo_infos.iter() {
         println!(
             "{} | {} | {} | {:?}",
@@ -248,7 +273,7 @@ pub fn list(base: PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn info_package(repo_infos: &HashMap<String, RepoInfo>, package: &str) -> Result<()> {
+fn info_package(repo_infos: &HashMap<String, Package>, package: &str) -> Result<()> {
     let hash =
         resolve_package(package, repo_infos)?.ok_or_else(|| anyhow!("{} not found", package))?;
 
@@ -268,12 +293,12 @@ fn info_package(repo_infos: &HashMap<String, RepoInfo>, package: &str) -> Result
 
 pub fn info(package: String, base: PathBuf) -> Result<()> {
     std::fs::create_dir_all(&base)?;
-    let repo_infos = get_repos(&base)?;
+    let repo_infos = get_packages(&base)?;
     info_package(&repo_infos, &package)?;
     Ok(())
 }
 
-fn resolve_package(input: &str, repo_infos: &HashMap<String, RepoInfo>) -> Result<Option<String>> {
+fn resolve_package(input: &str, repo_infos: &HashMap<String, Package>) -> Result<Option<String>> {
     if input.contains("://") || input.contains("git@") || input.contains("github.com") {
         let normalized = normalize_url(input)?;
         let hash = hash_string(&normalized);
@@ -305,4 +330,113 @@ fn resolve_package(input: &str, repo_infos: &HashMap<String, RepoInfo>) -> Resul
     }
 
     Ok(None)
+}
+
+pub fn build() -> Result<()> {
+    let packages = get_packages()?;
+    let xdg = Xdg::new()?;
+
+    let justpkg_data = xdg.data()?.join("justpkg");
+    let justpkg_config = xdg.config()?.join("justpkg");
+    let justpkg_bin = xdg.bin()?.join("justpkg");
+
+    for (hash, package) in packages.iter() {
+        if hash.contains("..") || hash.contains('/') {
+            return Err(anyhow!("invalid package hash: {hash}"));
+        }
+
+        let repo_path = justpkg_data.join(hash);
+
+        let repo = match git2::Repository::open(&repo_path) {
+            Ok(r) => r,
+            Err(_) => git2::Repository::clone(&package.url, &repo_path)?,
+        };
+
+        let target = git2::Oid::from_str(&package.commit)?;
+
+        let needs_update = repo.head().ok().and_then(|h| h.target()) != Some(target);
+
+        if needs_update {
+            let mut remote = repo.find_remote("origin")?;
+
+            let mut fetch_opts = git2::FetchOptions::new();
+
+            remote.fetch(
+                &["refs/heads/*:refs/remotes/origin/*"],
+                Some(&mut fetch_opts),
+                None,
+            )?;
+
+            repo.set_head_detached(target)?;
+            repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))?;
+        }
+
+        let build_script = justpkg_config.join(&package.build_script);
+
+        let status = Command::new("sh")
+            .arg(&build_script)
+            .current_dir(&repo_path)
+            .status()?
+            .code();
+
+        match status {
+            Some(0) => {}
+            Some(code) => {
+                return Err(anyhow!("build failed for {} with exit code {}", hash, code));
+            }
+            None => {
+                return Err(anyhow!(
+                    "build process terminated unexpectedly for {}",
+                    hash
+                ));
+            }
+        }
+
+        for binary in package.binaries.iter() {
+            let symlink_path = justpkg_bin.join(
+                binary
+                    .file_name()
+                    .ok_or(anyhow!("Binary is not a file"))?
+                    .to_string_lossy()
+                    .as_ref(),
+            );
+            let binary_path = repo_path.join(binary);
+            let _ = fs::remove_file(&symlink_path);
+            std::os::unix::fs::symlink(binary_path, symlink_path)?;
+        }
+    }
+
+    let valid_repos: HashSet<&str> = packages.keys().map(|s| s.as_str()).collect();
+    for entry in fs::read_dir(&justpkg_data)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                if !valid_repos.contains(name) {
+                    fs::remove_dir_all(&path)?;
+                }
+            }
+        }
+    }
+
+    let valid_binaries: HashSet<&str> = packages
+        .values()
+        .flat_map(|pkg| pkg.binaries.iter())
+        .filter_map(|p| p.file_name()?.to_str())
+        .collect();
+    for entry in fs::read_dir(&justpkg_bin)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_file() {
+            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                if !valid_binaries.contains(name) {
+                    fs::remove_file(&path)?;
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
