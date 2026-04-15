@@ -49,13 +49,8 @@ pub fn add(package: String, base: &Path, command: String, binaries: Vec<PathBuf>
             .fetch_options(fetch_options)
             .clone(&package, &repo_path)?;
 
-        if let Err(e) = build_repo(&repo_path, &command) {
-            return Err(e);
-        }
-        if let Err(e) = install_binaries(&repo_path, &binaries) {
-            return Err(e);
-        }
-
+        build_repo(&repo_path, &command)?;
+        install_binaries(&repo_path, &binaries)?;
         let last_commit = repo.head()?.target().map(|oid| oid.to_string());
         let repo_info = RepoInfo {
             url: package.to_string(),
@@ -77,10 +72,26 @@ pub fn add(package: String, base: &Path, command: String, binaries: Vec<PathBuf>
     Ok(())
 }
 
+fn update_package(
+    base: &Path,
+    repo_infos: &mut HashMap<String, RepoInfo>,
+    package: &str,
+) -> Result<()> {
+    let hash =
+        resolve_package(package, repo_infos)?.ok_or_else(|| anyhow!("{} not found", package))?;
+
+    let repo_info = repo_infos
+        .get_mut(&hash)
+        .ok_or_else(|| anyhow!("{} not found", package))?;
+
+    rebuild(base, &hash, repo_info)?;
+    Ok(())
+}
+
 pub fn update(packages: Vec<String>, base: PathBuf) -> Result<()> {
-    let mut changed = false;
     std::fs::create_dir_all(&base)?;
     let mut repo_infos = get_repos(&base)?;
+    let mut changed = false;
 
     if packages.is_empty() {
         for (hash, repo_info) in repo_infos.iter_mut() {
@@ -91,41 +102,25 @@ pub fn update(packages: Vec<String>, base: PathBuf) -> Result<()> {
                     }
                 }
                 Err(e) => {
-                    eprintln!("Rebuild failed: {e}");
+                    eprintln!("Update failed: {e}");
                 }
             }
         }
-        if changed {
-            save_repos(&base, &repo_infos)?;
-        }
-        println!("Finished");
     } else {
         for package in packages {
-            let hash = if let Some(h) = resolve_package(&package, &repo_infos)? {
-                h
-            } else {
-                eprintln!("{} not found", package);
-                continue;
-            };
-
-            if let Some(repo_info) = repo_infos.get_mut(&hash) {
-                match rebuild(&base, &hash, repo_info) {
-                    Ok(c) => {
-                        if c {
-                            changed = true;
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Rebuild failed: {e}");
-                    }
+            match update_package(&base, &mut repo_infos, &package) {
+                Ok(()) => changed = true,
+                Err(e) => {
+                    eprintln!("Update failed: {e}");
                 }
             }
         }
-        if changed {
-            save_repos(&base, &repo_infos)?;
-        }
-        println!("Finished");
     }
+
+    if changed {
+        save_repos(&base, &repo_infos)?;
+    }
+    println!("Finished");
     Ok(())
 }
 
@@ -177,41 +172,55 @@ fn save_repos(base: &Path, repo_infos: &HashMap<String, RepoInfo>) -> Result<()>
     Ok(())
 }
 
+fn remove_package(
+    base: &Path,
+    repo_infos: &mut HashMap<String, RepoInfo>,
+    package: &str,
+) -> Result<()> {
+    let hash =
+        resolve_package(package, repo_infos)?.ok_or_else(|| anyhow!("{} not found", package))?;
+
+    let repo_info = repo_infos
+        .remove(&hash)
+        .ok_or_else(|| anyhow!("{} not found", package))?;
+
+    let repo_path = base.join(&hash);
+    if repo_path.exists() {
+        std::fs::remove_dir_all(repo_path)?;
+    }
+
+    let xdg = microxdg::Xdg::new()?;
+    for binary in repo_info.binaries {
+        let symlink_path = xdg.bin()?.join(
+            binary
+                .file_name()
+                .ok_or(anyhow!("Binary is not a file"))?
+                .to_string_lossy()
+                .as_ref(),
+        );
+        if symlink_path.exists() {
+            std::fs::remove_file(symlink_path)?;
+        }
+    }
+
+    println!("Deleted: {}", package);
+    Ok(())
+}
+
 pub fn remove(packages: Vec<String>, base: PathBuf) -> Result<()> {
     std::fs::create_dir_all(&base)?;
     let mut repo_infos = get_repos(&base)?;
     let mut changed = false;
-    let xdg = microxdg::Xdg::new()?;
 
     for package in packages {
-        let hash = if let Some(h) = resolve_package(&package, &repo_infos)? {
-            h
-        } else {
-            eprintln!("{} not found", package);
-            continue;
-        };
-
-        if let Some(repo_info) = repo_infos.remove(&hash) {
-            let repo_path = base.join(&hash);
-            if repo_path.exists() {
-                std::fs::remove_dir_all(repo_path)?;
+        match remove_package(&base, &mut repo_infos, &package) {
+            Ok(()) => changed = true,
+            Err(e) => {
+                eprintln!("Remove failed: {e}");
             }
-            for binary in repo_info.binaries {
-                let symlink_path = xdg.bin()?.join(
-                    binary
-                        .file_name()
-                        .ok_or(anyhow!("Binary is not a file"))?
-                        .to_string_lossy()
-                        .as_ref(),
-                );
-                if symlink_path.exists() {
-                    std::fs::remove_file(symlink_path)?;
-                }
-            }
-            changed = true;
-            println!("Deleted: {}", package);
         }
     }
+
     if changed {
         save_repos(&base, &repo_infos)?;
     }
@@ -239,28 +248,28 @@ pub fn list(base: PathBuf) -> Result<()> {
     Ok(())
 }
 
-pub fn info(packages: Vec<String>, base: PathBuf) -> Result<()> {
+fn info_package(repo_infos: &HashMap<String, RepoInfo>, package: &str) -> Result<()> {
+    let hash =
+        resolve_package(package, repo_infos)?.ok_or_else(|| anyhow!("{} not found", package))?;
+
+    let repo_info = repo_infos
+        .get(&hash)
+        .ok_or_else(|| anyhow!("{} not found", package))?;
+
+    println!("{}", hash);
+    println!("Url: {}", repo_info.url);
+    println!(
+        "Fetched at: {}",
+        millis_to_datetime(repo_info.fetched_at as u64),
+    );
+    println!("Binaries: {:?}", repo_info.binaries);
+    Ok(())
+}
+
+pub fn info(package: String, base: PathBuf) -> Result<()> {
     std::fs::create_dir_all(&base)?;
     let repo_infos = get_repos(&base)?;
-
-    for package in packages {
-        let hash = if let Some(h) = resolve_package(&package, &repo_infos)? {
-            h
-        } else {
-            eprintln!("{} not found", package);
-            continue;
-        };
-
-        if let Some(repo_info) = repo_infos.get(&hash) {
-            println!("{}", hash);
-            println!("Url: {}", repo_info.url);
-            println!(
-                "Fetched at: {}",
-                millis_to_datetime(repo_info.fetched_at as u64),
-            );
-            println!("Binaries: {:?}", repo_info.binaries);
-        }
-    }
+    info_package(&repo_infos, &package)?;
     Ok(())
 }
 

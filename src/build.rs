@@ -38,12 +38,8 @@ pub fn rebuild(base: &Path, hash: &str, repo_info: &mut RepoInfo) -> Result<bool
             }
         }
         let repo_path = base.join(hash);
-        if let Err(e) = build_repo(&repo_path, &repo_info.command) {
-            return Err(e);
-        }
-        if let Err(e) = install_binaries(&repo_path, &repo_info.binaries) {
-            return Err(e);
-        }
+        build_repo(&repo_path, &repo_info.command)?;
+        install_binaries(&repo_path, &repo_info.binaries)?;
         repo_info.last_commit = head_oid;
         repo_info.fetched_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
         println!("Updated: {}", repo_info.url);

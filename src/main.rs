@@ -38,7 +38,7 @@ enum Commands {
     Ls,
 
     Info {
-        packages: Vec<String>,
+        package: String,
     },
 }
 
@@ -72,8 +72,8 @@ fn main() -> Result<()> {
             list(base)?;
             Ok(())
         }
-        Some(Commands::Info { packages }) => {
-            info(packages, base)?;
+        Some(Commands::Info { package }) => {
+            info(package, base)?;
             Ok(())
         }
         None => Ok(()),
