@@ -283,7 +283,10 @@ fn resolve_package(input: &str, repo_infos: &HashMap<String, RepoInfo>) -> Resul
     }
 
     for (hash, info) in repo_infos {
-        if info.binaries.iter().any(|b| b == input) {
+        if info.binaries.iter().any(|b| match b.file_name() {
+            Some(name) => name.to_string_lossy().as_ref() == input,
+            None => false,
+        }) {
             return Ok(Some(hash.clone()));
         }
     }
