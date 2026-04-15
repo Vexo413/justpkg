@@ -1,28 +1,34 @@
-use crate::build::{build_repo, install_binaries, rebuild};
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
-use git2::{FetchOptions, Oid, RemoteCallbacks, build::RepoBuilder};
+use git2::Oid;
 use microxdg::Xdg;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File},
-    path::{Path, PathBuf},
-    process::{Command, ExitStatus},
+    path::PathBuf,
+    process::Command,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct Package {
     pub url: String,
+    pub r: String,
     pub commit: String,
-    pub fetched_at: u128,
+    pub synced_at: u128,
     pub build_script: PathBuf,
     pub binaries: Vec<PathBuf>,
 }
 
-pub fn add(package: String, build_script: PathBuf, binaries: Vec<PathBuf>) -> Result<()> {
+pub fn add(
+    package: String,
+    build_script: PathBuf,
+    r: Option<String>,
+    commit: Option<Oid>,
+    binaries: Vec<PathBuf>,
+) -> Result<()> {
     let xdg = Xdg::new()?;
     let justpkg_data = xdg.data()?.join("justpkg");
     std::fs::create_dir_all(justpkg_data)?;
@@ -31,11 +37,21 @@ pub fn add(package: String, build_script: PathBuf, binaries: Vec<PathBuf>) -> Re
 
     let normalized = normalize_url(&package)?;
     let hash = hash_string(&normalized);
+    let r = match r {
+        Some(r) => r,
+        None => String::from("HEAD"),
+    };
+    let commit = match commit {
+        Some(c) => c,
+        None => resolve_remote_ref(&package, "HEAD")?,
+    }
+    .to_string();
 
     let entry = Package {
-        commit: resolve_remote_ref(&package, "HEAD")?.to_string(),
+        commit,
+        r,
         url: package,
-        fetched_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
+        synced_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
         binaries,
         build_script,
     };
@@ -55,94 +71,72 @@ pub fn add(package: String, build_script: PathBuf, binaries: Vec<PathBuf>) -> Re
     Ok(())
 }
 
-pub fn resolve_remote_ref(url: &str, r: &str) -> Result<Oid> {
-    let repo = git2::Repository::init_bare(std::path::Path::new("/tmp/git2-temp"))?;
-
+pub fn resolve_remote_ref(url: &str, r: &str) -> Result<git2::Oid> {
+    let repo = git2::Repository::init_bare(std::path::Path::new("/tmp/git2-lookup"))?;
     let mut remote = repo.remote_anonymous(url)?;
 
-    let mut fetch_opts = FetchOptions::new();
-    let callbacks = RemoteCallbacks::new();
+    remote.connect(git2::Direction::Fetch)?;
 
-    fetch_opts.remote_callbacks(callbacks);
-
-    remote.fetch(
-        &[
-            "refs/heads/*:refs/remotes/origin/*",
-            "refs/tags/*:refs/tags/*",
-        ],
-        Some(&mut fetch_opts),
-        None,
-    )?;
+    let refs = remote.list()?;
 
     if r == "HEAD" {
-        let head = repo.find_reference("refs/remotes/origin/HEAD")?;
-        return Ok(head
-            .resolve()?
-            .target()
-            .ok_or_else(|| anyhow!("invalid HEAD"))?);
+        for head in refs {
+            if head.name() == "HEAD" {
+                let name = head
+                    .symref_target()
+                    .ok_or_else(|| anyhow!("HEAD is not symbolic"))?;
+
+                // convert "refs/heads/main" → lookup object
+                return resolve_remote_ref(url, name.trim_start_matches("refs/heads/"));
+            }
+        }
     }
 
-    let branch = format!("refs/remotes/origin/{}", r);
-    if let Ok(reference) = repo.find_reference(&branch) {
-        return Ok(reference.target().ok_or_else(|| anyhow!("no target"))?);
-    }
-
-    let tag = format!("refs/tags/{}", r);
-    if let Ok(reference) = repo.find_reference(&tag) {
-        return Ok(reference.target().ok_or_else(|| anyhow!("no tag target"))?);
+    for head in refs {
+        let name = head.name();
+        if name.ends_with(r) {
+            return Ok(head.oid());
+        }
     }
 
     Err(anyhow!("ref not found: {}", r))
 }
 
-fn update_package(
-    base: &Path,
-    repo_infos: &mut HashMap<String, Package>,
-    package: &str,
-) -> Result<()> {
-    let hash =
-        resolve_package(package, repo_infos)?.ok_or_else(|| anyhow!("{} not found", package))?;
-
-    let repo_info = repo_infos
-        .get_mut(&hash)
-        .ok_or_else(|| anyhow!("{} not found", package))?;
-
-    rebuild(base, &hash, repo_info)?;
-    Ok(())
-}
-
-pub fn update(packages: Vec<String>, base: PathBuf) -> Result<()> {
-    std::fs::create_dir_all(&base)?;
-    let mut repo_infos = get_packages(&base)?;
+pub fn update(packages: Vec<String>) -> Result<()> {
+    let mut repo_infos = get_packages()?;
     let mut changed = false;
 
-    if packages.is_empty() {
-        for (hash, repo_info) in repo_infos.iter_mut() {
-            match rebuild(&base, hash, repo_info) {
-                Ok(c) => {
-                    if c {
-                        changed = true;
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Update failed: {e}");
-                }
-            }
-        }
+    let targets: Vec<String> = if packages.is_empty() {
+        repo_infos.keys().cloned().collect()
     } else {
-        for package in packages {
-            match update_package(&base, &mut repo_infos, &package) {
-                Ok(()) => changed = true,
-                Err(e) => {
-                    eprintln!("Update failed: {e}");
-                }
-            }
+        packages
+    };
+
+    for input in targets {
+        let hash =
+            resolve_package(&input, &repo_infos)?.ok_or_else(|| anyhow!("{} not found", input))?;
+
+        let pkg = repo_infos
+            .get_mut(&hash)
+            .ok_or_else(|| anyhow!("{} not found", input))?;
+
+        let latest = resolve_remote_ref(&pkg.url, &pkg.r)?;
+
+        let current = git2::Oid::from_str(&pkg.commit)?;
+
+        if current != latest {
+            pkg.commit = latest.to_string();
+            pkg.synced_at = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+
+            changed = true;
         }
     }
 
     if changed {
-        save_repos(&base, &repo_infos)?;
+        save_repos(&repo_infos)?;
+        build()?;
     }
+
     println!("Finished");
     Ok(())
 }
@@ -197,58 +191,25 @@ fn save_repos(repo_infos: &HashMap<String, Package>) -> Result<()> {
     Ok(())
 }
 
-fn remove_package(
-    base: &Path,
-    repo_infos: &mut HashMap<String, Package>,
-    package: &str,
-) -> Result<()> {
-    let hash =
-        resolve_package(package, repo_infos)?.ok_or_else(|| anyhow!("{} not found", package))?;
-
-    let repo_info = repo_infos
-        .remove(&hash)
-        .ok_or_else(|| anyhow!("{} not found", package))?;
-
-    let repo_path = base.join(&hash);
-    if repo_path.exists() {
-        std::fs::remove_dir_all(repo_path)?;
-    }
-
-    let xdg = microxdg::Xdg::new()?;
-    for binary in repo_info.binaries {
-        let symlink_path = xdg.bin()?.join(
-            binary
-                .file_name()
-                .ok_or(anyhow!("Binary is not a file"))?
-                .to_string_lossy()
-                .as_ref(),
-        );
-        if symlink_path.exists() {
-            std::fs::remove_file(symlink_path)?;
-        }
-    }
-
-    println!("Deleted: {}", package);
-    Ok(())
-}
-
-pub fn remove(packages: Vec<String>, base: PathBuf) -> Result<()> {
-    std::fs::create_dir_all(&base)?;
-    let mut repo_infos = get_packages(&base)?;
+pub fn remove(packages: Vec<String>) -> Result<()> {
+    let mut repo_infos = get_packages()?;
     let mut changed = false;
 
-    for package in packages {
-        match remove_package(&base, &mut repo_infos, &package) {
-            Ok(()) => changed = true,
-            Err(e) => {
-                eprintln!("Remove failed: {e}");
-            }
+    for input in packages {
+        let hash =
+            resolve_package(&input, &repo_infos)?.ok_or_else(|| anyhow!("{} not found", input))?;
+
+        if repo_infos.remove(&hash).is_some() {
+            changed = true;
+            println!("Removed: {}", input);
         }
     }
 
     if changed {
-        save_repos(&base, &repo_infos)?;
+        save_repos(&repo_infos)?;
+        build()?;
     }
+
     println!("Finished");
     Ok(())
 }
@@ -258,43 +219,43 @@ fn millis_to_datetime(ms: u64) -> DateTime<Utc> {
     system_time.into()
 }
 
-pub fn list(base: PathBuf) -> Result<()> {
-    std::fs::create_dir_all(&base)?;
-    let repo_infos = get_packages(&base)?;
+pub fn list() -> Result<()> {
+    let repo_infos = get_packages()?;
+
     for (hash, repo_info) in repo_infos.iter() {
         println!(
-            "{} | {} | {} | {:?}",
+            "{} | {} | {} | {} | {:?}",
             hash,
             repo_info.url,
-            millis_to_datetime(repo_info.fetched_at as u64),
+            repo_info.r,
+            millis_to_datetime(repo_info.synced_at as u64),
             repo_info.binaries
         );
     }
+
     Ok(())
 }
 
-fn info_package(repo_infos: &HashMap<String, Package>, package: &str) -> Result<()> {
+pub fn info(package: String) -> Result<()> {
+    let repo_infos = get_packages()?;
+
     let hash =
-        resolve_package(package, repo_infos)?.ok_or_else(|| anyhow!("{} not found", package))?;
+        resolve_package(&package, &repo_infos)?.ok_or_else(|| anyhow!("{} not found", package))?;
 
     let repo_info = repo_infos
         .get(&hash)
         .ok_or_else(|| anyhow!("{} not found", package))?;
 
-    println!("{}", hash);
+    println!("Hash: {}", hash);
     println!("Url: {}", repo_info.url);
+    println!("Ref: {}", repo_info.r);
     println!(
-        "Fetched at: {}",
-        millis_to_datetime(repo_info.fetched_at as u64),
+        "Synced at: {}",
+        millis_to_datetime(repo_info.synced_at as u64)
     );
+    println!("Commit: {}", repo_info.commit);
     println!("Binaries: {:?}", repo_info.binaries);
-    Ok(())
-}
 
-pub fn info(package: String, base: PathBuf) -> Result<()> {
-    std::fs::create_dir_all(&base)?;
-    let repo_infos = get_packages(&base)?;
-    info_package(&repo_infos, &package)?;
     Ok(())
 }
 

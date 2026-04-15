@@ -23,6 +23,10 @@ enum Commands {
     Add {
         package: String,
         build_script: PathBuf,
+        #[arg(long, short)]
+        r: Option<String>,
+        #[arg(long, short)]
+        commit: Option<String>,
         #[arg(required = true)]
         binaries: Vec<PathBuf>,
     },
@@ -49,35 +53,34 @@ fn main() -> Result<()> {
         println!("Value for config: {}", config_path.display());
     }
 
-    let base = microxdg::Xdg::new()?.data()?.join("justpkg");
-
     match cli.command {
         Some(Commands::Add {
             package,
             build_script,
+            r,
+            commit,
             binaries,
         }) => {
-            add(package, build_script, binaries)?;
+            let oid: Option<git2::Oid> = commit.map(|c| git2::Oid::from_str(&c)).transpose()?;
+            add(package, build_script, r, oid, binaries)?;
             Ok(())
         }
         Some(Commands::Update { packages }) => {
-            update(packages, base)?;
+            update(packages)?;
             Ok(())
         }
         Some(Commands::Rm { packages }) => {
-            remove(packages, base)?;
+            remove(packages)?;
             Ok(())
         }
         Some(Commands::Ls) => {
-            list(base)?;
+            list()?;
             Ok(())
         }
         Some(Commands::Info { package }) => {
-            info(package, base)?;
+            info(package)?;
             Ok(())
         }
         None => Ok(()),
     }
-
-    // Continued program logic goes here...
 }
