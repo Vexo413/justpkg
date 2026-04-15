@@ -1,4 +1,3 @@
-mod build;
 mod commands;
 
 use crate::commands::*;
@@ -21,13 +20,10 @@ struct Cli {
 enum Commands {
     /// Adds a package
     Add {
-        packages: Vec<String>,
-        #[arg(short, long, value_name = "FILE")]
-        script: Option<PathBuf>,
-        #[arg(short, long, value_name = "COMMAND")]
-        command: Option<String>,
-        #[arg(short, long, value_name = "FILE")]
-        binary: Option<PathBuf>,
+        package: String,
+        command: String,
+        #[arg(required = true)]
+        binaries: Vec<PathBuf>,
     },
     /// Updates packages
     Update {
@@ -53,39 +49,33 @@ fn main() -> Result<()> {
     }
 
     let base = microxdg::Xdg::new()?.data()?.join("justpkg");
-    match &cli.command {
+
+    match cli.command {
         Some(Commands::Add {
-            packages,
-            script,
+            package,
             command,
-            binary,
+            binaries,
         }) => {
-            add(
-                packages,
-                &base,
-                script.as_deref(),
-                command.as_deref(),
-                binary.as_deref(),
-            )?;
+            add(package, &base, command, binaries)?;
             Ok(())
         }
         Some(Commands::Update { packages }) => {
-            update(packages, &base)?;
+            update(packages, base)?;
             Ok(())
         }
         Some(Commands::Rm { packages }) => {
-            remove(packages, &base)?;
+            remove(packages, base)?;
             Ok(())
         }
         Some(Commands::Ls) => {
-            list(&base)?;
+            list(base)?;
             Ok(())
         }
         Some(Commands::Info { packages }) => {
-            info(&packages, &base)?;
+            info(packages, base)?;
             Ok(())
         }
-        None => return Ok(()),
+        None => Ok(()),
     }
 
     // Continued program logic goes here...

@@ -1,4 +1,4 @@
-use crate::build::{build_repo, rebuild};
+use crate::build::{build_repo, install_binaries, rebuild};
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use git2::{FetchOptions, build::RepoBuilder};
@@ -12,89 +12,79 @@ use std::{
 };
 
 #[derive(Serialize, Deserialize, Clone)]
-enum BuildMethod {
-    Script {
-        script_path: PathBuf,
-        binary_path: PathBuf,
-    },
-}
-
-#[derive(Serialize, Deserialize, Clone)]
 pub struct RepoInfo {
     pub url: String,
     pub last_commit: Option<String>,
     pub fetched_at: u128,
-    pub binaries: Vec<String>,
-    pub build_method: BuildMethod,
+    pub binaries: Vec<PathBuf>,
+    pub command: String,
 }
 
-pub fn add(
-    packages: &Vec<String>,
-    base: &Path,
-    script: Option<&Path>,
-    command: Option<&str>,
-    binary: Option<&Path>,
-) -> Result<()> {
-    std::fs::create_dir_all(&base)?;
-    let mut repo_infos = get_repos(&base)?;
+pub fn add(package: String, base: &Path, command: String, binaries: Vec<PathBuf>) -> Result<()> {
+    std::fs::create_dir_all(base)?;
+    let mut repo_infos = get_repos(base)?;
     let mut changed = false;
 
-    for package in packages {
-        let normalized = normalize_url(&package)?;
-        let hash = hash_string(&normalized);
-        let repo_path = base.join(&hash);
+    let normalized = normalize_url(&package)?;
+    let hash = hash_string(&normalized);
+    let repo_path = base.join(&hash);
 
-        if repo_path.exists() {
-            if let Some(repo_info) = repo_infos.get_mut(&hash) {
-                match rebuild(base, &hash, repo_info) {
-                    Ok(c) => {
-                        if c {
-                            changed = true;
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Rebuild failed: {e}");
+    if repo_path.exists() {
+        if let Some(repo_info) = repo_infos.get_mut(&hash) {
+            match rebuild(base, &hash, repo_info) {
+                Ok(c) => {
+                    if c {
+                        changed = true;
                     }
                 }
+                Err(e) => {
+                    return Err(e);
+                }
             }
-        } else {
-            let mut fetch_options = FetchOptions::new();
-            fetch_options.depth(1);
-            let repo = RepoBuilder::new()
-                .fetch_options(fetch_options)
-                .clone(&package, &repo_path)?;
-
-            let binaries = build_repo(&repo_path)?;
-
-            let last_commit = repo.head()?.target().map(|oid| oid.to_string());
-            let repo_info = RepoInfo {
-                url: package.to_string(),
-                last_commit,
-                fetched_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
-                binaries,
-            };
-
-            repo_infos.insert(hash, repo_info);
-            changed = true;
-            println!("Added: {}", package);
         }
+    } else {
+        let mut fetch_options = FetchOptions::new();
+        fetch_options.depth(1);
+        let repo = RepoBuilder::new()
+            .fetch_options(fetch_options)
+            .clone(&package, &repo_path)?;
+
+        if let Err(e) = build_repo(&repo_path, &command) {
+            return Err(e);
+        }
+        if let Err(e) = install_binaries(&repo_path, &binaries) {
+            return Err(e);
+        }
+
+        let last_commit = repo.head()?.target().map(|oid| oid.to_string());
+        let repo_info = RepoInfo {
+            url: package.to_string(),
+            last_commit,
+            fetched_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis(),
+            binaries,
+            command,
+        };
+
+        repo_infos.insert(hash, repo_info);
+        changed = true;
+        println!("Added: {}", package);
     }
 
     if changed {
-        save_repos(&base, &repo_infos)?;
+        save_repos(base, &repo_infos)?;
     }
     println!("Finished");
     Ok(())
 }
 
-pub fn update(packages: &Vec<String>, base: &Path) -> Result<()> {
+pub fn update(packages: Vec<String>, base: PathBuf) -> Result<()> {
     let mut changed = false;
     std::fs::create_dir_all(&base)?;
     let mut repo_infos = get_repos(&base)?;
 
     if packages.is_empty() {
         for (hash, repo_info) in repo_infos.iter_mut() {
-            match rebuild(&base, &hash, repo_info) {
+            match rebuild(&base, hash, repo_info) {
                 Ok(c) => {
                     if c {
                         changed = true;
@@ -111,10 +101,10 @@ pub fn update(packages: &Vec<String>, base: &Path) -> Result<()> {
         println!("Finished");
     } else {
         for package in packages {
-            let hash = if let Some(h) = resolve_package(package, &repo_infos)? {
+            let hash = if let Some(h) = resolve_package(&package, &repo_infos)? {
                 h
             } else {
-                println!("{} not found", package);
+                eprintln!("{} not found", package);
                 continue;
             };
 
@@ -187,17 +177,17 @@ fn save_repos(base: &Path, repo_infos: &HashMap<String, RepoInfo>) -> Result<()>
     Ok(())
 }
 
-pub fn remove(packages: &Vec<String>, base: &Path) -> Result<()> {
+pub fn remove(packages: Vec<String>, base: PathBuf) -> Result<()> {
     std::fs::create_dir_all(&base)?;
     let mut repo_infos = get_repos(&base)?;
     let mut changed = false;
     let xdg = microxdg::Xdg::new()?;
 
     for package in packages {
-        let hash = if let Some(h) = resolve_package(package, &repo_infos)? {
+        let hash = if let Some(h) = resolve_package(&package, &repo_infos)? {
             h
         } else {
-            println!("{} not found", package);
+            eprintln!("{} not found", package);
             continue;
         };
 
@@ -207,9 +197,15 @@ pub fn remove(packages: &Vec<String>, base: &Path) -> Result<()> {
                 std::fs::remove_dir_all(repo_path)?;
             }
             for binary in repo_info.binaries {
-                let bin_path = xdg.bin()?.join(binary);
-                if bin_path.exists() {
-                    std::fs::remove_file(bin_path)?;
+                let symlink_path = xdg.bin()?.join(
+                    binary
+                        .file_name()
+                        .ok_or(anyhow!("Binary is not a file"))?
+                        .to_string_lossy()
+                        .as_ref(),
+                );
+                if symlink_path.exists() {
+                    std::fs::remove_file(symlink_path)?;
                 }
             }
             changed = true;
@@ -228,7 +224,7 @@ fn millis_to_datetime(ms: u64) -> DateTime<Utc> {
     system_time.into()
 }
 
-pub fn list(base: &Path) -> Result<()> {
+pub fn list(base: PathBuf) -> Result<()> {
     std::fs::create_dir_all(&base)?;
     let repo_infos = get_repos(&base)?;
     for (hash, repo_info) in repo_infos.iter() {
@@ -243,15 +239,15 @@ pub fn list(base: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn info(packages: &Vec<String>, base: &Path) -> Result<()> {
+pub fn info(packages: Vec<String>, base: PathBuf) -> Result<()> {
     std::fs::create_dir_all(&base)?;
     let repo_infos = get_repos(&base)?;
 
     for package in packages {
-        let hash = if let Some(h) = resolve_package(package, &repo_infos)? {
+        let hash = if let Some(h) = resolve_package(&package, &repo_infos)? {
             h
         } else {
-            println!("{} not found", package);
+            eprintln!("{} not found", package);
             continue;
         };
 
