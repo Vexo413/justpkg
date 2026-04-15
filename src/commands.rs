@@ -336,26 +336,26 @@ pub fn rebuild() -> Result<()> {
 
             repo.set_head_detached(target)?;
             repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))?;
-        }
 
-        let build_script = justpkg_config.join(&package.build_script);
+            let build_script = justpkg_config.join(&package.build_script);
 
-        let status = Command::new("sh")
-            .arg(&build_script)
-            .current_dir(&repo_path)
-            .status()?
-            .code();
+            let status = Command::new("sh")
+                .arg(&build_script)
+                .current_dir(&repo_path)
+                .status()?
+                .code();
 
-        match status {
-            Some(0) => {}
-            Some(code) => {
-                return Err(anyhow!("build failed for {} with exit code {}", hash, code));
-            }
-            None => {
-                return Err(anyhow!(
-                    "build process terminated unexpectedly for {}",
-                    hash
-                ));
+            match status {
+                Some(0) => {}
+                Some(code) => {
+                    return Err(anyhow!("build failed for {} with exit code {}", hash, code));
+                }
+                None => {
+                    return Err(anyhow!(
+                        "build process terminated unexpectedly for {}",
+                        hash
+                    ));
+                }
             }
         }
 
