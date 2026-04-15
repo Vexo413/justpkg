@@ -86,7 +86,7 @@ pub fn resolve_remote_ref(url: &str, r: &str) -> Result<git2::Oid> {
                     .symref_target()
                     .ok_or_else(|| anyhow!("HEAD is not symbolic"))?;
 
-                // convert "refs/heads/main" → lookup object
+                fs::remove_dir_all("/tmp/git2-lookup")?;
                 return resolve_remote_ref(url, name.trim_start_matches("refs/heads/"));
             }
         }
@@ -95,9 +95,12 @@ pub fn resolve_remote_ref(url: &str, r: &str) -> Result<git2::Oid> {
     for head in refs {
         let name = head.name();
         if name.ends_with(r) {
+            fs::remove_dir_all("/tmp/git2-lookup")?;
             return Ok(head.oid());
         }
     }
+
+    fs::remove_dir_all("/tmp/git2-lookup")?;
 
     Err(anyhow!("ref not found: {}", r))
 }
@@ -298,8 +301,11 @@ pub fn build() -> Result<()> {
     let xdg = Xdg::new()?;
 
     let justpkg_data = xdg.data()?.join("justpkg");
+    fs::create_dir_all(&justpkg_data)?;
     let justpkg_config = xdg.config()?.join("justpkg");
+    fs::create_dir_all(&justpkg_config)?;
     let justpkg_bin = xdg.bin()?.join("justpkg");
+    fs::create_dir_all(&justpkg_bin)?;
 
     for (hash, package) in packages.iter() {
         if hash.contains("..") || hash.contains('/') {
