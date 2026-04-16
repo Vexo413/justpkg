@@ -304,7 +304,7 @@ pub fn rebuild() -> Result<()> {
     fs::create_dir_all(&justpkg_data)?;
     let justpkg_config = xdg.config()?.join("justpkg");
     fs::create_dir_all(&justpkg_config)?;
-    let justpkg_bin = xdg.bin()?.join("justpkg");
+    let justpkg_bin = justpkg_data.join("bin");
     fs::create_dir_all(&justpkg_bin)?;
 
     for (hash, package) in packages.iter() {
