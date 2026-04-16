@@ -358,7 +358,6 @@ pub fn rebuild() -> Result<()> {
         .with_context(|| format!("Failed to create bin directory: {}", justpkg_bin.display()))?;
 
     for (hash, package) in packages.iter() {
-        println!("Building {}", package.url);
         if hash.contains("..") || hash.contains('/') {
             return Err(anyhow!("invalid package hash: {hash}"));
         }
@@ -374,9 +373,11 @@ pub fn rebuild() -> Result<()> {
         let target = git2::Oid::from_str(&package.commit)
             .with_context(|| format!("Failed to parse commit hash '{}'", package.commit))?;
 
-        let needs_update = repo.head().ok().and_then(|h| h.target()) != Some(target);
+        let needs_update = repo.head().ok().and_then(|h| h.target()) != Some(target)
+            || !package.binaries.iter().all(|b| b.exists());
 
         if needs_update {
+            println!("Building {}", package.url);
             let mut remote = repo
                 .find_remote("origin")
                 .context("Failed to find origin remote")?;
