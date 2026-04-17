@@ -323,8 +323,9 @@ fn resolve_package(input: &str, repo_infos: &HashMap<String, Package>) -> Result
 }
 
 pub fn rebuild() -> Result<()> {
+    // Setup
     let packages = get_packages().context("Failed to load package database")?;
-    let xdg = Xdg::new().context("Failed to initialize XDG directories")?;
+    let xdg = Xdg::new().context("Failed to find XDG directories")?;
 
     let justpkg_data = xdg
         .data()
@@ -336,13 +337,19 @@ pub fn rebuild() -> Result<()> {
             justpkg_data.display()
         )
     })?;
+
     let justpkg_repos = justpkg_data.join("repos");
     fs::create_dir_all(&justpkg_repos).with_context(|| {
         format!(
-            "Failed to create config directory: {}",
+            "Failed to create repos directory: {}",
             justpkg_repos.display()
         )
     })?;
+
+    let justpkg_bin = justpkg_data.join("bin");
+    fs::create_dir_all(&justpkg_bin)
+        .with_context(|| format!("Failed to create bin directory: {}", justpkg_bin.display()))?;
+
     let justpkg_config = xdg
         .config()
         .context("Failed to get XDG config directory")?
@@ -353,13 +360,11 @@ pub fn rebuild() -> Result<()> {
             justpkg_config.display()
         )
     })?;
-    let justpkg_bin = justpkg_data.join("bin");
-    fs::create_dir_all(&justpkg_bin)
-        .with_context(|| format!("Failed to create bin directory: {}", justpkg_bin.display()))?;
 
+    // Install
     for (hash, package) in packages.iter() {
         if hash.contains("..") || hash.contains('/') {
-            return Err(anyhow!("invalid package hash: {hash}"));
+            return Err(anyhow!("Invalid package hash: {hash}"));
         }
 
         let repo_path = justpkg_repos.join(hash);
@@ -370,10 +375,21 @@ pub fn rebuild() -> Result<()> {
                 .with_context(|| format!("Failed to clone repository: {}", package.url))?,
         };
 
-        let target = git2::Oid::from_str(&package.commit)
-            .with_context(|| format!("Failed to parse commit hash '{}'", package.commit))?;
+        let target = match git2::Oid::from_str(&package.commit)
+            .with_context(|| format!("Failed to parse commit hash '{}'", package.commit))
+        {
+            Ok(t) => t,
+            Err(e) => {
+                let _ = fs::remove_dir_all(&repo_path);
+                return Err(e);
+            }
+        };
 
-        let needs_update = repo.head().ok().and_then(|h| h.target()) != Some(target)
+        let needs_update = repo
+            .resolve_reference_from_short_name(&package.r)
+            .ok()
+            .and_then(|h| h.target())
+            != Some(target)
             || !package.binaries.iter().all(|b| b.exists());
 
         if needs_update {
@@ -386,7 +402,10 @@ pub fn rebuild() -> Result<()> {
 
             remote
                 .fetch(
-                    &["refs/heads/*:refs/remotes/origin/*"],
+                    &[
+                        "refs/heads/*:refs/remotes/origin/*",
+                        "refs/tags/*:refs/tags/*",
+                    ],
                     Some(&mut fetch_opts),
                     None,
                 )
