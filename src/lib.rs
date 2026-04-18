@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    fs,
+    env, fs,
     path::PathBuf,
     time::{Duration, UNIX_EPOCH},
 };
@@ -39,7 +39,8 @@ pub fn get_packages() -> Result<HashMap<String, Package>> {
 }
 
 pub fn resolve_remote_ref(url: &str, reference: &str) -> Result<git2::Oid> {
-    let repo = git2::Repository::init_bare(std::path::Path::new("/tmp/git2-lookup"))
+    let temp_path = env::temp_dir().join("git2-lookup");
+    let repo = git2::Repository::init_bare(&temp_path)
         .context("Failed to create temporary git repository")?;
     let mut remote = repo
         .remote_anonymous(url)
@@ -58,8 +59,7 @@ pub fn resolve_remote_ref(url: &str, reference: &str) -> Result<git2::Oid> {
                     .symref_target()
                     .ok_or_else(|| anyhow!("HEAD is not symbolic"))?;
 
-                fs::remove_dir_all("/tmp/git2-lookup")
-                    .context("Failed to clean up temp directory")?;
+                fs::remove_dir_all(temp_path).context("Failed to clean up temp directory")?;
                 return resolve_remote_ref(url, name.trim_start_matches("refs/heads/"));
             }
         }
@@ -68,12 +68,12 @@ pub fn resolve_remote_ref(url: &str, reference: &str) -> Result<git2::Oid> {
     for head in refs {
         let name = head.name();
         if name.ends_with(reference) {
-            fs::remove_dir_all("/tmp/git2-lookup").context("Failed to clean up temp directory")?;
+            fs::remove_dir_all(&temp_path).context("Failed to clean up temp directory")?;
             return Ok(head.oid());
         }
     }
 
-    fs::remove_dir_all("/tmp/git2-lookup").context("Failed to clean up temp directory")?;
+    fs::remove_dir_all(temp_path).context("Failed to clean up temp directory")?;
 
     Err(anyhow!("ref not found: {}", reference))
 }
