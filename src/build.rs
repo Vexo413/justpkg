@@ -135,7 +135,7 @@ fn build_package(
         .with_context(|| format!("Failed to parse commit hash '{}'", package.commit))?;
 
     let needs_update = repo
-        .resolve_reference_from_short_name(&package.r)
+        .resolve_reference_from_short_name(&package.reference)
         .ok()
         .and_then(|h| h.target())
         != Some(target)

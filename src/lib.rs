@@ -13,7 +13,7 @@ use std::{
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct Package {
     pub url: String,
-    pub r: String,
+    pub reference: String,
     pub commit: String,
     pub synced_at: u128,
     pub build_script: PathBuf,
@@ -38,7 +38,7 @@ pub fn get_packages() -> Result<HashMap<String, Package>> {
     }
 }
 
-pub fn resolve_remote_ref(url: &str, r: &str) -> Result<git2::Oid> {
+pub fn resolve_remote_ref(url: &str, reference: &str) -> Result<git2::Oid> {
     let repo = git2::Repository::init_bare(std::path::Path::new("/tmp/git2-lookup"))
         .context("Failed to create temporary git repository")?;
     let mut remote = repo
@@ -51,7 +51,7 @@ pub fn resolve_remote_ref(url: &str, r: &str) -> Result<git2::Oid> {
 
     let refs = remote.list().context("Failed to list remote refs")?;
 
-    if r == "HEAD" {
+    if reference == "HEAD" {
         for head in refs {
             if head.name() == "HEAD" {
                 let name = head
@@ -67,7 +67,7 @@ pub fn resolve_remote_ref(url: &str, r: &str) -> Result<git2::Oid> {
 
     for head in refs {
         let name = head.name();
-        if name.ends_with(r) {
+        if name.ends_with(reference) {
             fs::remove_dir_all("/tmp/git2-lookup").context("Failed to clean up temp directory")?;
             return Ok(head.oid());
         }
@@ -75,7 +75,7 @@ pub fn resolve_remote_ref(url: &str, r: &str) -> Result<git2::Oid> {
 
     fs::remove_dir_all("/tmp/git2-lookup").context("Failed to clean up temp directory")?;
 
-    Err(anyhow!("ref not found: {}", r))
+    Err(anyhow!("ref not found: {}", reference))
 }
 
 pub fn normalize_url(url: &str) -> Result<String> {

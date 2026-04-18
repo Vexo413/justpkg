@@ -5,14 +5,17 @@ use justpkg::{
     Package, get_packages, hash_string, millis_to_datetime, normalize_url, resolve_package,
     resolve_remote_ref, save_repos,
 };
+use microxdg::Xdg;
 use std::{
+    env,
     path::PathBuf,
+    process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 pub fn add(
     package: String,
-    build_script: PathBuf,
+    build_script: Option<PathBuf>,
     r: Option<String>,
     commit: Option<Oid>,
     binaries: Vec<PathBuf>,
@@ -21,20 +24,35 @@ pub fn add(
 
     let normalized = normalize_url(&package).context("Failed to normalize URL")?;
     let hash = hash_string(&normalized);
-    let r = match r {
+
+    let build_script = match build_script {
+        Some(path) => env::current_dir()?.join(&path),
+        None => {
+            let editor = env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+            let path = Xdg::new()?
+                .config()?
+                .join("justpkg/build-scripts")
+                .join(format!("{}.sh", &hash));
+            Command::new(editor).arg(&path).status()?;
+            path
+        }
+    };
+
+    let reference = match r {
         Some(r) => r,
         None => String::from("HEAD"),
     };
     let commit = match commit {
         Some(c) => c,
-        None => resolve_remote_ref(&package, "HEAD")
-            .with_context(|| format!("Failed to resolve remote ref 'HEAD' for {}", package))?,
+        None => resolve_remote_ref(&package, &reference).with_context(|| {
+            format!("Failed to resolve remote ref {} for {}", reference, package)
+        })?,
     }
     .to_string();
 
     let entry = Package {
         commit,
-        r,
+        reference,
         url: package,
         synced_at: SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -78,8 +96,12 @@ pub fn update(packages: Vec<String>) -> Result<()> {
             .get_mut(&hash)
             .ok_or_else(|| anyhow!("{} not found", input))?;
 
-        let latest = resolve_remote_ref(&pkg.url, &pkg.r)
-            .with_context(|| format!("Failed to resolve remote ref '{}' for {}", pkg.r, pkg.url))?;
+        let latest = resolve_remote_ref(&pkg.url, &pkg.reference).with_context(|| {
+            format!(
+                "Failed to resolve remote ref '{}' for {}",
+                pkg.reference, pkg.url
+            )
+        })?;
 
         let current = git2::Oid::from_str(&pkg.commit)
             .with_context(|| format!("Failed to parse commit hash '{}'", pkg.commit))?;
@@ -136,7 +158,7 @@ pub fn list() -> Result<()> {
             "{} | {} | {} | {} | {:?}",
             hash,
             repo_info.url,
-            repo_info.r,
+            repo_info.reference,
             millis_to_datetime(repo_info.synced_at as u64),
             repo_info.binaries
         );
@@ -158,7 +180,7 @@ pub fn info(package: String) -> Result<()> {
 
     println!("Hash: {}", hash);
     println!("Url: {}", repo_info.url);
-    println!("Ref: {}", repo_info.r);
+    println!("Ref: {}", repo_info.reference);
     println!(
         "Synced at: {}",
         millis_to_datetime(repo_info.synced_at as u64)

@@ -24,9 +24,10 @@ enum Commands {
     /// Adds a package
     Add {
         package: String,
-        build_script: PathBuf,
         #[arg(long, short)]
-        r: Option<String>,
+        build_script: Option<PathBuf>,
+        #[arg(long, short)]
+        reference: Option<String>,
         #[arg(long, short)]
         commit: Option<String>,
         #[arg(required = true)]
@@ -63,12 +64,12 @@ fn main() -> Result<()> {
         Some(Commands::Add {
             package,
             build_script,
-            r,
+            reference,
             commit,
             binaries,
         }) => {
             let oid: Option<git2::Oid> = commit.map(|c| git2::Oid::from_str(&c)).transpose()?;
-            add(package, build_script, r, oid, binaries)?;
+            add(package, build_script, reference, oid, binaries)?;
             Ok(())
         }
         Some(Commands::Update { packages }) => {
