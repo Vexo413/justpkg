@@ -27,7 +27,15 @@ pub fn add(
     let hash = hash_string(&normalized);
 
     let build_script = match build_script {
-        Some(path) => env::current_dir()?.join(&path),
+        Some(path) => {
+            let src = env::current_dir()?.join(&path);
+            let dst = Xdg::new()?
+                .config()?
+                .join("justpkg/build-scripts")
+                .join(format!("{}.sh", &hash));
+            fs::copy(src, &dst)?;
+            dst
+        }
         None => {
             let editor = env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
             let path = Xdg::new()?
