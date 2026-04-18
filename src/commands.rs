@@ -7,7 +7,8 @@ use justpkg::{
 };
 use microxdg::Xdg;
 use std::{
-    env,
+    env, fs,
+    io::Write,
     path::PathBuf,
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
@@ -33,6 +34,8 @@ pub fn add(
                 .config()?
                 .join("justpkg/build-scripts")
                 .join(format!("{}.sh", &hash));
+            let mut file = fs::File::create(&path)?;
+            file.write_all(String::from("#!/usr/bin/env bash\nset -euo pipefail").as_bytes())?;
             Command::new(editor).arg(&path).status()?;
             path
         }
