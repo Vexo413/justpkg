@@ -353,9 +353,35 @@ pub fn rebuild() -> Result<()> {
 
     // Install
     for (hash, package) in packages.iter() {
+        let repo_path = repos_path.join(hash);
+        let exists = repo_path.exists();
+        let original_head = if exists {
+            git2::Repository::open(&repo_path)
+                .ok()
+                .and_then(|r| r.head().ok()?.target())
+        } else {
+            None
+        };
+
         match build_package(&package, &hash, &repos_path, &bin_path, &config_path) {
             Err(e) => {
                 eprintln!("{} build failed: {e}", package.url);
+                if exists {
+                    if let Some(head) = original_head {
+                        if let Ok(repo) = git2::Repository::open(&repo_path) {
+                            let _ = repo.set_head_detached(head);
+                            let _ = repo.checkout_head(Some(
+                                git2::build::CheckoutBuilder::new().force(),
+                            ));
+                            let _ = Command::new("git")
+                                .args(["clean", "-fd"])
+                                .current_dir(&repo_path)
+                                .status();
+                        }
+                    }
+                } else if repo_path.exists() {
+                    let _ = fs::remove_dir_all(&repo_path);
+                }
             }
             Ok(()) => {
                 println!("{} build succeeded", package.url)
@@ -425,15 +451,8 @@ fn build_package(
             .with_context(|| format!("Failed to clone repository: {}", package.url))?,
     };
 
-    let target = match git2::Oid::from_str(&package.commit)
-        .with_context(|| format!("Failed to parse commit hash '{}'", package.commit))
-    {
-        Ok(t) => t,
-        Err(e) => {
-            let _ = fs::remove_dir_all(&repo_path);
-            return Err(e);
-        }
-    };
+    let target = git2::Oid::from_str(&package.commit)
+        .with_context(|| format!("Failed to parse commit hash '{}'", package.commit))?;
 
     let needs_update = repo
         .resolve_reference_from_short_name(&package.r)
@@ -472,24 +491,17 @@ fn build_package(
             .arg(&build_script)
             .current_dir(&repo_path)
             .status()
-            .with_context(|| format!("Failed to execute build script: {}", build_script.display()))?
-            .code();
+            .with_context(|| format!("Failed to execute build script: {}", build_script.display()))?;
 
-        match status {
-            Some(0) => {
-                println!("Build sucessful")
-            }
-            Some(code) => {
-                return Err(anyhow!("build failed for {} with exit code {}", hash, code));
-            }
-            None => {
-                return Err(anyhow!(
-                    "build process terminated unexpectedly for {}",
-                    hash
-                ));
-            }
+        if !status.success() {
+            let error_msg = match status.code() {
+                Some(code) => format!("build failed for {} with exit code {}", hash, code),
+                None => format!("build process terminated unexpectedly for {}", hash),
+            };
+            return Err(anyhow!(error_msg));
         }
     }
+
     println!("Linking {}", package.url);
     for binary in package.binaries.iter() {
         let symlink_path = bin_path.join(
