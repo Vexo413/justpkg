@@ -1,10 +1,7 @@
 use crate::build::rebuild;
 use anyhow::{Context, Result, anyhow};
 use git2::Oid;
-use justpkg::{
-    Package, get_packages, hash_string, millis_to_datetime, normalize_url, resolve_package,
-    resolve_remote_ref, save_repos,
-};
+use justpkg::{Package, get_packages, millis_to_datetime, resolve_remote_ref, save_repos};
 use microxdg::Xdg;
 use std::{
     env, fs,
@@ -15,33 +12,32 @@ use std::{
 };
 
 pub fn add(
-    package: String,
+    name: String,
+    url: String,
     build_script: Option<PathBuf>,
-    r: Option<String>,
     commit: Option<Oid>,
     binaries: Vec<PathBuf>,
 ) -> Result<()> {
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(anyhow!("{name} is not a valid package name"));
+    }
     let mut repo_infos = get_packages().context("Failed to load package database")?;
 
-    let normalized = normalize_url(&package).context("Failed to normalize URL")?;
-    let hash = hash_string(&normalized);
-
+    let build_scripts_path = Xdg::new()?.config()?.join("justpkg/build-scripts");
+    fs::create_dir_all(&build_scripts_path)?;
     let build_script = match build_script {
         Some(path) => {
             let src = env::current_dir()?.join(&path);
-            let dst = Xdg::new()?
-                .config()?
-                .join("justpkg/build-scripts")
-                .join(format!("{}.sh", &hash));
+            let dst = build_scripts_path.join(format!("{}.sh", &name));
             fs::copy(src, &dst)?;
             dst
         }
         None => {
             let editor = env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-            let path = Xdg::new()?
-                .config()?
-                .join("justpkg/build-scripts")
-                .join(format!("{}.sh", &hash));
+            let path = build_scripts_path.join(format!("{}.sh", &name));
             let mut file = fs::File::create(&path)?;
             file.write_all(String::from("#!/usr/bin/env bash\nset -euo pipefail").as_bytes())?;
             Command::new(editor).arg(&path).status()?;
@@ -49,22 +45,16 @@ pub fn add(
         }
     };
 
-    let reference = match r {
-        Some(r) => r,
-        None => String::from("HEAD"),
-    };
     let commit = match commit {
         Some(c) => c,
-        None => resolve_remote_ref(&package, &reference).with_context(|| {
-            format!("Failed to resolve remote ref {} for {}", reference, package)
-        })?,
+        None => resolve_remote_ref(&url, "HEAD")
+            .with_context(|| format!("Failed to resolve HEAD for {}", url))?,
     }
     .to_string();
 
     let entry = Package {
         commit,
-        reference,
-        url: package,
+        url,
         synced_at: SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .context("Failed to get current time")?
@@ -73,13 +63,13 @@ pub fn add(
         build_script,
     };
 
-    let changed = match repo_infos.get(&hash) {
+    let changed = match repo_infos.get(&name) {
         Some(old) => old != &entry,
         None => true,
     };
 
     if changed {
-        repo_infos.insert(hash, entry);
+        repo_infos.insert(name, entry);
         save_repos(&repo_infos).context("Failed to save package database")?;
     }
 
@@ -88,38 +78,43 @@ pub fn add(
     Ok(())
 }
 
-pub fn update(packages: Vec<String>) -> Result<()> {
+fn split_name_ref(s: &str) -> (&str, Option<&str>) {
+    match s.split_once('@') {
+        Some((name, reference)) => (name, Some(reference)),
+        None => (s, None),
+    }
+}
+
+pub fn update(names: Vec<String>) -> Result<()> {
     let mut repo_infos = get_packages().context("Failed to load package database")?;
     let mut changed = false;
 
-    let targets: Vec<String> = if packages.is_empty() {
+    let names: Vec<String> = if names.is_empty() {
         repo_infos.keys().cloned().collect()
     } else {
-        packages
+        names
     };
 
-    for input in targets {
-        let hash = resolve_package(&input, &repo_infos)
-            .with_context(|| format!("Failed to resolve package '{}'", input))?
-            .ok_or_else(|| anyhow!("{} not found", input))?;
+    for (name, reference) in names.iter().map(|n| split_name_ref(n)) {
+        let package = repo_infos
+            .get_mut(name)
+            .ok_or_else(|| anyhow!("{} not found", name))?;
 
-        let pkg = repo_infos
-            .get_mut(&hash)
-            .ok_or_else(|| anyhow!("{} not found", input))?;
+        let latest =
+            resolve_remote_ref(&package.url, reference.unwrap_or("HEAD")).with_context(|| {
+                format!(
+                    "Failed to resolve remote ref '{}' for {}",
+                    reference.unwrap_or("HEAD"),
+                    package.url
+                )
+            })?;
 
-        let latest = resolve_remote_ref(&pkg.url, &pkg.reference).with_context(|| {
-            format!(
-                "Failed to resolve remote ref '{}' for {}",
-                pkg.reference, pkg.url
-            )
-        })?;
-
-        let current = git2::Oid::from_str(&pkg.commit)
-            .with_context(|| format!("Failed to parse commit hash '{}'", pkg.commit))?;
+        let current = git2::Oid::from_str(&package.commit)
+            .with_context(|| format!("Failed to parse commit hash '{}'", package.commit))?;
 
         if current != latest {
-            pkg.commit = latest.to_string();
-            pkg.synced_at = SystemTime::now()
+            package.commit = latest.to_string();
+            package.synced_at = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .context("Failed to get current time")?
                 .as_millis();
@@ -137,18 +132,14 @@ pub fn update(packages: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-pub fn remove(packages: Vec<String>) -> Result<()> {
+pub fn remove(names: Vec<String>) -> Result<()> {
     let mut repo_infos = get_packages().context("Failed to load package database")?;
     let mut changed = false;
 
-    for input in packages {
-        let hash = resolve_package(&input, &repo_infos)
-            .with_context(|| format!("Failed to resolve package '{}'", input))?
-            .ok_or_else(|| anyhow!("{} not found", input))?;
-
-        if repo_infos.remove(&hash).is_some() {
+    for name in names {
+        if repo_infos.remove(&name).is_some() {
             changed = true;
-            println!("Removed: {}", input);
+            println!("Removed: {}", name);
         }
     }
 
@@ -164,12 +155,11 @@ pub fn remove(packages: Vec<String>) -> Result<()> {
 pub fn list() -> Result<()> {
     let repo_infos = get_packages().context("Failed to load package database")?;
 
-    for (hash, repo_info) in repo_infos.iter() {
+    for (name, repo_info) in repo_infos.iter() {
         println!(
-            "{} | {} | {} | {} | {:?}",
-            hash,
+            "{}: {} | {} | {:?}",
+            name,
             repo_info.url,
-            repo_info.reference,
             millis_to_datetime(repo_info.synced_at as u64),
             repo_info.binaries
         );
@@ -178,20 +168,15 @@ pub fn list() -> Result<()> {
     Ok(())
 }
 
-pub fn info(package: String) -> Result<()> {
+pub fn info(name: String) -> Result<()> {
     let repo_infos = get_packages().context("Failed to load package database")?;
 
-    let hash = resolve_package(&package, &repo_infos)
-        .with_context(|| format!("Failed to resolve package '{}'", package))?
-        .ok_or_else(|| anyhow!("{} not found", package))?;
-
     let repo_info = repo_infos
-        .get(&hash)
-        .ok_or_else(|| anyhow!("{} not found", package))?;
+        .get(&name)
+        .ok_or_else(|| anyhow!("{} not found", name))?;
 
-    println!("Hash: {}", hash);
+    println!("Hash: {}", name);
     println!("Url: {}", repo_info.url);
-    println!("Ref: {}", repo_info.reference);
     println!(
         "Synced at: {}",
         millis_to_datetime(repo_info.synced_at as u64)

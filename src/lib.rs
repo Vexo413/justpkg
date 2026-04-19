@@ -13,7 +13,6 @@ use std::{
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct Package {
     pub url: String,
-    pub reference: String,
     pub commit: String,
     pub synced_at: u128,
     pub build_script: PathBuf,
@@ -38,8 +37,21 @@ pub fn get_packages() -> Result<HashMap<String, Package>> {
     }
 }
 
+struct TempRepo(PathBuf);
+
+impl Drop for TempRepo {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 pub fn resolve_remote_ref(url: &str, reference: &str) -> Result<git2::Oid> {
-    let temp_path = env::temp_dir().join("git2-lookup");
+    let temp_path = env::temp_dir().join(format!(
+        "justpkg-lookup-{}",
+        hash_string(&format!("{}{}{}", url, reference, Utc::now()))
+    ));
+    let _guard = TempRepo(temp_path.clone());
+
     let repo = git2::Repository::init_bare(&temp_path)
         .context("Failed to create temporary git repository")?;
     let mut remote = repo
@@ -59,7 +71,6 @@ pub fn resolve_remote_ref(url: &str, reference: &str) -> Result<git2::Oid> {
                     .symref_target()
                     .ok_or_else(|| anyhow!("HEAD is not symbolic"))?;
 
-                fs::remove_dir_all(temp_path).context("Failed to clean up temp directory")?;
                 return resolve_remote_ref(url, name.trim_start_matches("refs/heads/"));
             }
         }
@@ -68,38 +79,11 @@ pub fn resolve_remote_ref(url: &str, reference: &str) -> Result<git2::Oid> {
     for head in refs {
         let name = head.name();
         if name.ends_with(reference) {
-            fs::remove_dir_all(&temp_path).context("Failed to clean up temp directory")?;
             return Ok(head.oid());
         }
     }
 
-    fs::remove_dir_all(temp_path).context("Failed to clean up temp directory")?;
-
     Err(anyhow!("ref not found: {}", reference))
-}
-
-pub fn normalize_url(url: &str) -> Result<String> {
-    let mut normalized = url.to_string();
-
-    if let Some(pos) = normalized.find("://") {
-        normalized = normalized[(pos + 3)..].to_string();
-    }
-
-    if normalized.starts_with("git@") {
-        normalized = normalized[4..].to_string();
-    }
-
-    normalized = normalized.replace(':', "/");
-
-    if normalized.ends_with(".git") {
-        normalized = normalized[..normalized.len() - 4].to_string();
-    }
-
-    while normalized.contains("//") {
-        normalized = normalized.replace("//", "/");
-    }
-
-    Ok(normalized)
 }
 
 pub fn hash_string(s: &str) -> String {
@@ -125,41 +109,4 @@ pub fn save_repos(repo_infos: &HashMap<String, Package>) -> Result<()> {
 pub fn millis_to_datetime(ms: u64) -> DateTime<Utc> {
     let system_time = UNIX_EPOCH + Duration::from_millis(ms);
     system_time.into()
-}
-
-pub fn resolve_package(
-    input: &str,
-    repo_infos: &HashMap<String, Package>,
-) -> Result<Option<String>> {
-    if input.contains("://") || input.contains("git@") || input.contains("github.com") {
-        let normalized = normalize_url(input)?;
-        let hash = hash_string(&normalized);
-        if repo_infos.contains_key(&hash) {
-            return Ok(Some(hash));
-        }
-    }
-
-    for (hash, info) in repo_infos {
-        if info.binaries.iter().any(|b| match b.file_name() {
-            Some(name) => name.to_string_lossy().as_ref() == input,
-            None => false,
-        }) {
-            return Ok(Some(hash.clone()));
-        }
-    }
-
-    let mut matches = Vec::new();
-    for hash in repo_infos.keys() {
-        if hash.starts_with(input) {
-            matches.push(hash.clone());
-        }
-    }
-
-    if matches.len() == 1 {
-        return Ok(Some(matches[0].clone()));
-    } else if matches.len() > 1 {
-        return Err(anyhow!("Ambiguous package identifier: {}", input));
-    }
-
-    Ok(None)
 }

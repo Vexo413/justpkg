@@ -23,11 +23,10 @@ enum Commands {
     Rebuild,
     /// Adds a package
     Add {
-        package: String,
+        name: String,
+        url: String,
         #[arg(long, short)]
         build_script: Option<PathBuf>,
-        #[arg(long, short)]
-        reference: Option<String>,
         #[arg(long, short)]
         commit: Option<String>,
         #[arg(required = true)]
@@ -35,17 +34,17 @@ enum Commands {
     },
     /// Updates packages
     Update {
-        packages: Vec<String>,
+        names: Vec<String>,
     },
     /// Removes packages
     Rm {
-        packages: Vec<String>,
+        names: Vec<String>,
     },
     /// Lists packages
     Ls,
 
     Info {
-        package: String,
+        name: String,
     },
 }
 
@@ -62,30 +61,30 @@ fn main() -> Result<()> {
             Ok(())
         }
         Some(Commands::Add {
-            package,
+            name,
+            url,
             build_script,
-            reference,
             commit,
             binaries,
         }) => {
             let oid: Option<git2::Oid> = commit.map(|c| git2::Oid::from_str(&c)).transpose()?;
-            add(package, build_script, reference, oid, binaries)?;
+            add(name, url, build_script, oid, binaries)?;
             Ok(())
         }
-        Some(Commands::Update { packages }) => {
-            update(packages)?;
+        Some(Commands::Update { names }) => {
+            update(names)?;
             Ok(())
         }
-        Some(Commands::Rm { packages }) => {
-            remove(packages)?;
+        Some(Commands::Rm { names }) => {
+            remove(names)?;
             Ok(())
         }
         Some(Commands::Ls) => {
             list()?;
             Ok(())
         }
-        Some(Commands::Info { package }) => {
-            info(package)?;
+        Some(Commands::Info { name }) => {
+            info(name)?;
             Ok(())
         }
         None => Ok(()),

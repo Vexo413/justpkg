@@ -33,8 +33,14 @@ pub fn rebuild() -> Result<()> {
     })?;
 
     // Install
-    for (hash, package) in packages.iter() {
-        let repo_path = repos_path.join(hash);
+    for (name, package) in packages.iter() {
+        if !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(anyhow!("{name} is not a valid package name"));
+        }
+        let repo_path = repos_path.join(name);
         let exists = repo_path.exists();
         let original_head = if exists {
             git2::Repository::open(&repo_path)
@@ -44,7 +50,7 @@ pub fn rebuild() -> Result<()> {
             None
         };
 
-        match build_package(&package, &hash, &repos_path, &bin_path, &config_path) {
+        match build_package(&name, &package, &repos_path, &bin_path, &config_path) {
             Err(e) => {
                 eprintln!("{} build failed: {e}", package.url);
                 if exists {
@@ -113,17 +119,17 @@ pub fn rebuild() -> Result<()> {
 }
 
 fn build_package(
+    name: &str,
     package: &Package,
-    hash: &str,
     repos_path: &Path,
     bin_path: &Path,
     config_path: &Path,
 ) -> Result<()> {
-    if hash.contains("..") || hash.contains('/') {
-        return Err(anyhow!("Invalid package hash: {hash}"));
+    if name.contains("..") || name.contains('/') {
+        return Err(anyhow!("Invalid package name: {name}"));
     }
 
-    let repo_path = repos_path.join(hash);
+    let repo_path = repos_path.join(name);
 
     let repo = match git2::Repository::open(&repo_path) {
         Ok(r) => r,
@@ -134,12 +140,9 @@ fn build_package(
     let target = git2::Oid::from_str(&package.commit)
         .with_context(|| format!("Failed to parse commit hash '{}'", package.commit))?;
 
-    let needs_update = repo
-        .resolve_reference_from_short_name(&package.reference)
-        .ok()
-        .and_then(|h| h.target())
-        != Some(target)
-        || !package.binaries.iter().all(|b| b.exists());
+    // TODO add build script change detection
+    let needs_update = repo.head()?.peel_to_commit()?.id() != target
+        || !package.binaries.iter().all(|b| repo_path.join(b).exists());
 
     if needs_update {
         println!("Building {}", package.url);
@@ -177,8 +180,8 @@ fn build_package(
 
         if !status.success() {
             let error_msg = match status.code() {
-                Some(code) => format!("build failed for {} with exit code {}", hash, code),
-                None => format!("build process terminated unexpectedly for {}", hash),
+                Some(code) => format!("build failed for {} with exit code {}", name, code),
+                None => format!("build process terminated unexpectedly for {}", name),
             };
             return Err(anyhow!(error_msg));
         }
