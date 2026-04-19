@@ -23,27 +23,35 @@ enum Commands {
     Rebuild,
     /// Adds a package
     Add {
+        /// Name
         name: String,
+        /// Git remote URL
         url: String,
+        /// Current directory build script paths
         #[arg(long, short)]
         build_script: Option<PathBuf>,
+        /// Commit hash
         #[arg(long, short)]
         commit: Option<String>,
+        /// Repo relative binary paths
         #[arg(required = true)]
         binaries: Vec<PathBuf>,
     },
     /// Updates packages
     Update {
+        /// Names or names and refs, each concatenated with '@'
         names: Vec<String>,
     },
     /// Removes packages
     Rm {
+        // Names
         names: Vec<String>,
     },
     /// Lists packages
     Ls,
-
+    /// Displays info of a package
     Info {
+        /// Names
         name: String,
     },
 }
