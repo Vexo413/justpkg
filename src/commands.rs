@@ -89,12 +89,6 @@ pub fn update(names: Vec<String>) -> Result<()> {
     let mut repo_infos = get_packages().context("Failed to load package database")?;
     let mut changed = false;
 
-    let names: Vec<String> = if names.is_empty() {
-        repo_infos.keys().cloned().collect()
-    } else {
-        names
-    };
-
     for (name, reference) in names.iter().map(|n| split_name_ref(n)) {
         let package = repo_infos
             .get_mut(name)
