@@ -169,8 +169,8 @@ pub fn info(name: String) -> Result<()> {
         .get(&name)
         .ok_or_else(|| anyhow!("{} not found", name))?;
 
-    println!("Hash: {}", name);
-    println!("Url: {}", repo_info.url);
+    println!("Name: {}", name);
+    println!("URL: {}", repo_info.url);
     println!(
         "Synced at: {}",
         millis_to_datetime(repo_info.synced_at as u64)
