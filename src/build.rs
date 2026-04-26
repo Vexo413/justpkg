@@ -1,7 +1,13 @@
 use anyhow::{Context, Result, anyhow};
 use justpkg::{Package, get_packages};
 use microxdg::Xdg;
-use std::{collections::HashSet, fs, path::Path, process::Command};
+use std::{
+    collections::HashSet,
+    fs,
+    os::unix::fs::PermissionsExt,
+    path::Path,
+    process::{self, Command},
+};
 
 pub fn rebuild() -> Result<()> {
     // Setup
@@ -170,8 +176,12 @@ fn build_package(
 
         let build_script = config_path.join(&package.build_script);
 
-        let status = Command::new("sh")
-            .arg(&build_script)
+        let mut perms = fs::metadata(&build_script)?.permissions();
+        let mode = perms.mode();
+        perms.set_mode(mode | 0o111);
+        fs::set_permissions(&build_script, perms)?;
+
+        let status = Command::new(&build_script)
             .current_dir(&repo_path)
             .status()
             .with_context(|| {
