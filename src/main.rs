@@ -4,6 +4,7 @@ mod commands;
 use crate::{build::rebuild, commands::*};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use justpkg::Shell;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -54,6 +55,11 @@ enum Commands {
         /// Names
         name: String,
     },
+    /// Generates shell completion
+    Init {
+        /// Shell
+        shell: Shell,
+    },
 }
 
 fn main() -> Result<()> {
@@ -93,6 +99,10 @@ fn main() -> Result<()> {
         }
         Some(Commands::Info { name }) => {
             info(name)?;
+            Ok(())
+        }
+        Some(Commands::Init { shell }) => {
+            init(shell)?;
             Ok(())
         }
         None => Ok(()),

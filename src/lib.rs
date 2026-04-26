@@ -110,3 +110,11 @@ pub fn millis_to_datetime(ms: u64) -> DateTime<Utc> {
     let system_time = UNIX_EPOCH + Duration::from_millis(ms);
     system_time.into()
 }
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+pub enum Shell {
+    Bash,
+    Zsh,
+    Fish,
+    Nu,
+}

@@ -1,13 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use justpkg::{Package, get_packages};
 use microxdg::Xdg;
-use std::{
-    collections::HashSet,
-    fs,
-    os::unix::fs::PermissionsExt,
-    path::Path,
-    process::{self, Command},
-};
+use std::{collections::HashSet, fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
 
 pub fn rebuild() -> Result<()> {
     // Setup

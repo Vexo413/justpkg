@@ -1,7 +1,7 @@
 use crate::build::rebuild;
 use anyhow::{Context, Result, anyhow};
 use git2::Oid;
-use justpkg::{Package, get_packages, millis_to_datetime, resolve_remote_ref, save_repos};
+use justpkg::{Package, Shell, get_packages, millis_to_datetime, resolve_remote_ref, save_repos};
 use microxdg::Xdg;
 use std::{
     env, fs,
@@ -10,6 +10,33 @@ use std::{
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
+
+pub fn init(shell: Shell) -> Result<()> {
+    let xdg = Xdg::new().context("Failed to find XDG directories")?;
+    let bin_path = xdg
+        .data()
+        .context("Failed to get XDG data directory")?
+        .join("justpkg/bin");
+
+    let bin_path_str = bin_path.to_string_lossy();
+
+    match shell {
+        Shell::Bash | Shell::Zsh => {
+            println!("export PATH=\"{}:$PATH\"", bin_path_str);
+        }
+        Shell::Fish => {
+            println!("fish_add_path \"{}\"", bin_path_str);
+        }
+        Shell::Nu => {
+            println!(
+                "$env.PATH = ($env.PATH | split-row (char esep) | prepend '{}' | uniq)",
+                bin_path_str
+            );
+        }
+    }
+
+    Ok(())
+}
 
 pub fn add(
     name: String,
