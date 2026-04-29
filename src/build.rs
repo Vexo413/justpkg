@@ -1,7 +1,9 @@
 use anyhow::{Context, Result, anyhow};
 use justpkg::{Package, get_packages};
 use microxdg::Xdg;
+use regex::Regex;
 use std::{collections::HashSet, fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
+use which::which_re_in;
 
 pub fn rebuild() -> Result<()> {
     // Setup
@@ -50,27 +52,27 @@ pub fn rebuild() -> Result<()> {
             None
         };
 
-        match build_package(&name, &package, &repos_path, &bin_path, &config_path) {
+        match build_package(name, package, &repos_path, &bin_path, &config_path) {
             Err(e) => {
                 eprintln!("{} build failed: {e}", package.url);
                 if exists {
-                    if let Some(head) = original_head {
-                        if let Ok(repo) = git2::Repository::open(&repo_path) {
-                            let _ = repo.set_head_detached(head);
-                            let _ = repo
-                                .checkout_head(Some(git2::build::CheckoutBuilder::new().force()));
-                            let _ = Command::new("git")
-                                .args(["clean", "-fd"])
-                                .current_dir(&repo_path)
-                                .status();
-                        }
+                    if let Some(head) = original_head
+                        && let Ok(repo) = git2::Repository::open(&repo_path)
+                    {
+                        let _ = repo.set_head_detached(head);
+                        let _ =
+                            repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()));
+                        let _ = Command::new("git")
+                            .args(["clean", "-fd"])
+                            .current_dir(&repo_path)
+                            .status();
                     }
                 } else if repo_path.exists() {
                     let _ = fs::remove_dir_all(&repo_path);
                 }
             }
             Ok(()) => {
-                println!("{} build succeeded", package.url)
+                println!("{} build succeeded", &name)
             }
         }
     }
@@ -82,36 +84,44 @@ pub fn rebuild() -> Result<()> {
         let entry = entry?;
         let path = entry.path();
 
-        if path.is_dir() {
-            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                if !valid_repos.contains(name) {
-                    fs::remove_dir_all(&path).with_context(|| {
-                        format!("Failed to remove stale repo: {}", path.display())
-                    })?;
-                }
+        if path.is_dir()
+            && let Some(name) = path.file_name().and_then(|s| s.to_str())
+            && !valid_repos.contains(name)
+        {
+            fs::remove_dir_all(&path)
+                .with_context(|| format!("Failed to remove stale repo: {}", path.display()))?;
+        }
+    }
+
+    let all_re = Regex::new(".*")?;
+    let mut valid_binaries = HashSet::new();
+    for (name, pkg) in &packages {
+        let bins = if pkg.binaries.is_empty() {
+            which_re_in(&all_re, Some(repos_path.join(name)))?.collect::<Vec<_>>()
+        } else {
+            pkg.binaries.clone()
+        };
+
+        for bin in bins {
+            if let Some(bin_name) = bin.file_name().and_then(|s| s.to_str()) {
+                valid_binaries.insert(bin_name.to_string());
             }
         }
     }
 
-    let valid_binaries: HashSet<&str> = packages
-        .values()
-        .flat_map(|pkg| pkg.binaries.iter())
-        .filter_map(|p| p.file_name()?.to_str())
-        .collect();
     for entry in fs::read_dir(&bin_path)
         .with_context(|| format!("Failed to read bin directory: {}", bin_path.display()))?
     {
         let entry = entry?;
         let path = entry.path();
 
-        if path.is_file() {
-            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                if !valid_binaries.contains(name) {
-                    fs::remove_file(&path).with_context(|| {
-                        format!("Failed to remove stale binary symlink: {}", path.display())
-                    })?;
-                }
-            }
+        if path.is_file()
+            && let Some(name) = path.file_name().and_then(|s| s.to_str())
+            && !valid_binaries.contains(name)
+        {
+            fs::remove_file(&path).with_context(|| {
+                format!("Failed to remove stale binary symlink: {}", path.display())
+            })?;
         }
     }
 

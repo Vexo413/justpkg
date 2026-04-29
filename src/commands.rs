@@ -3,6 +3,7 @@ use anyhow::{Context, Result, anyhow};
 use git2::Oid;
 use justpkg::{Package, Shell, get_packages, millis_to_datetime, resolve_remote_ref, save_repos};
 use microxdg::Xdg;
+use regex::Regex;
 use std::{
     env, fs,
     io::Write,
@@ -10,6 +11,7 @@ use std::{
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
+use which::which_re_in;
 
 pub fn init(shell: Shell) -> Result<()> {
     let xdg = Xdg::new().context("Failed to find XDG directories")?;
@@ -53,18 +55,18 @@ pub fn add(
     }
     let mut repo_infos = get_packages().context("Failed to load package database")?;
 
-    let build_scripts_path = Xdg::new()?.config()?.join("justpkg/build-scripts");
-    fs::create_dir_all(&build_scripts_path)?;
+    let build_script_paths = Xdg::new()?.config()?.join("justpkg/build-scripts");
+    fs::create_dir_all(&build_script_paths)?;
     let build_script = match build_script {
         Some(path) => {
             let src = env::current_dir()?.join(&path);
-            let dst = build_scripts_path.join(format!("{}.sh", &name));
+            let dst = build_script_paths.join(format!("{}.sh", &name));
             fs::copy(src, &dst)?;
             dst
         }
         None => {
             let editor = env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-            let path = build_scripts_path.join(format!("{}.sh", &name));
+            let path = build_script_paths.join(format!("{}.sh", &name));
             let mut file = fs::File::create(&path)?;
             file.write_all(String::from("#!/usr/bin/env bash\nset -euo pipefail").as_bytes())?;
             Command::new(editor).arg(&path).status()?;
@@ -78,6 +80,17 @@ pub fn add(
             .with_context(|| format!("Failed to resolve HEAD for {}", url))?,
     }
     .to_string();
+    let binaries = if binaries.is_empty() {
+        which_re_in(
+            Regex::new(".*")?,
+            Some(Xdg::new()?.data()?.join("justpkg/repos").join(&name)),
+        )?
+        .collect()
+    } else {
+        binaries
+    };
+
+    dbg!(&binaries);
 
     let entry = Package {
         commit,

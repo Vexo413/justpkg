@@ -30,12 +30,12 @@ enum Commands {
         url: String,
         /// Current directory build script paths
         #[arg(long, short)]
-        build_script: Option<PathBuf>,
+        script: Option<PathBuf>,
         /// Commit hash
         #[arg(long, short)]
         commit: Option<String>,
-        /// Repo relative binary paths
-        #[arg(required = true)]
+        /// Repo relative binary paths (If not provided will search for binaries FIRST time)
+        #[arg(long, short)]
         binaries: Vec<PathBuf>,
     },
     /// Updates packages
@@ -77,12 +77,12 @@ fn main() -> Result<()> {
         Some(Commands::Add {
             name,
             url,
-            build_script,
+            script,
             commit,
             binaries,
         }) => {
             let oid: Option<git2::Oid> = commit.map(|c| git2::Oid::from_str(&c)).transpose()?;
-            add(name, url, build_script, oid, binaries)?;
+            add(name, url, script, oid, binaries)?;
             Ok(())
         }
         Some(Commands::Update { names }) => {
