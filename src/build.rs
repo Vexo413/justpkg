@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, anyhow};
 use justpkg::{Package, get_packages};
 use microxdg::Xdg;
-use std::{collections::{HashMap, HashSet}, fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
+use std::{collections::HashSet, fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
+use topological_sort::TopologicalSort;
 
 pub fn rebuild() -> Result<()> {
     // Setup
@@ -32,7 +33,29 @@ pub fn rebuild() -> Result<()> {
         )
     })?;
 
-    let sorted_packages = topological_sort(&packages)?;
+    let mut ts = TopologicalSort::<&String>::new();
+    for (name, package) in &packages {
+        ts.insert(name);
+        for dep in &package.dependencies {
+            if !packages.contains_key(dep) {
+                return Err(anyhow!(
+                    "Package {} depends on unknown package {}",
+                    name,
+                    dep
+                ));
+            }
+            ts.add_dependency(dep, name);
+        }
+    }
+
+    let mut sorted_packages = Vec::new();
+    while let Some(name) = ts.pop() {
+        sorted_packages.push(name);
+    }
+
+    if !ts.is_empty() {
+        return Err(anyhow!("Circular dependency detected in packages"));
+    }
 
     // Install
     for name in sorted_packages {
@@ -212,48 +235,5 @@ fn build_package(
             )
         })?;
     }
-    Ok(())
-}
-
-fn topological_sort(packages: &HashMap<String, Package>) -> Result<Vec<&String>> {
-    let mut sorted = Vec::new();
-    let mut visited = HashSet::new();
-    let mut visiting = HashSet::new();
-
-    for name in packages.keys() {
-        topological_sort_visit(name, packages, &mut sorted, &mut visited, &mut visiting)?;
-    }
-
-    Ok(sorted)
-}
-
-fn topological_sort_visit<'a>(
-    name: &'a String,
-    packages: &'a HashMap<String, Package>,
-    sorted: &mut Vec<&'a String>,
-    visited: &mut HashSet<&'a String>,
-    visiting: &mut HashSet<&'a String>,
-) -> Result<()> {
-    if visiting.contains(name) {
-        return Err(anyhow!("Circular dependency detected involving package: {}", name));
-    }
-
-    if !visited.contains(name) {
-        visiting.insert(name);
-
-        if let Some(package) = packages.get(name) {
-            for dep in &package.dependencies {
-                if !packages.contains_key(dep) {
-                    return Err(anyhow!("Package {} depends on unknown package {}", name, dep));
-                }
-                topological_sort_visit(dep, packages, sorted, visited, visiting)?;
-            }
-        }
-
-        visiting.remove(name);
-        visited.insert(name);
-        sorted.push(name);
-    }
-
     Ok(())
 }
