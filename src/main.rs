@@ -37,6 +37,9 @@ enum Commands {
         /// Repo relative binary paths (If not provided will search for binaries FIRST time)
         #[arg(long, short)]
         binaries: Vec<PathBuf>,
+        /// Dependencies
+        #[arg(long, short)]
+        dependencies: Vec<String>,
     },
     /// Updates packages
     Update {
@@ -80,9 +83,10 @@ fn main() -> Result<()> {
             script,
             commit,
             binaries,
+            dependencies,
         }) => {
             let oid: Option<git2::Oid> = commit.map(|c| git2::Oid::from_str(&c)).transpose()?;
-            add(name, url, script, oid, binaries)?;
+            add(name, url, script, oid, binaries, dependencies)?;
             Ok(())
         }
         Some(Commands::Update { names }) => {

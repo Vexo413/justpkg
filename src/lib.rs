@@ -4,7 +4,7 @@ use microxdg::Xdg;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env, fs,
     path::PathBuf,
     time::{Duration, UNIX_EPOCH},
@@ -17,6 +17,7 @@ pub struct Package {
     pub synced_at: u128,
     pub build_script: PathBuf,
     pub binaries: Vec<PathBuf>,
+    pub dependencies: HashSet<String>,
 }
 
 pub fn get_packages() -> Result<HashMap<String, Package>> {

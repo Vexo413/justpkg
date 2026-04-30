@@ -44,6 +44,7 @@ pub fn add(
     build_script: Option<PathBuf>,
     commit: Option<Oid>,
     binaries: Vec<PathBuf>,
+    dependencies: Vec<String>,
 ) -> Result<()> {
     if !name
         .chars()
@@ -88,6 +89,7 @@ pub fn add(
             .as_millis(),
         binaries,
         build_script,
+        dependencies: dependencies.into_iter().collect(),
     };
 
     let changed = match repo_infos.get(&name) {
@@ -204,6 +206,7 @@ pub fn info(name: String) -> Result<()> {
     );
     println!("Commit: {}", repo_info.commit);
     println!("Binaries: {:?}", repo_info.binaries);
+    println!("Dependencies: {:?}", repo_info.dependencies);
 
     Ok(())
 }
