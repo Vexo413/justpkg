@@ -1,9 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use justpkg::{Package, get_packages};
 use microxdg::Xdg;
-use regex::Regex;
 use std::{collections::HashSet, fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
-use which::which_re_in;
 
 pub fn rebuild() -> Result<()> {
     // Setup
@@ -93,21 +91,11 @@ pub fn rebuild() -> Result<()> {
         }
     }
 
-    let all_re = Regex::new(".*")?;
-    let mut valid_binaries = HashSet::new();
-    for (name, pkg) in &packages {
-        let bins = if pkg.binaries.is_empty() {
-            which_re_in(&all_re, Some(repos_path.join(name)))?.collect::<Vec<_>>()
-        } else {
-            pkg.binaries.clone()
-        };
-
-        for bin in bins {
-            if let Some(bin_name) = bin.file_name().and_then(|s| s.to_str()) {
-                valid_binaries.insert(bin_name.to_string());
-            }
-        }
-    }
+    let valid_binaries: HashSet<&str> = packages
+        .values()
+        .flat_map(|pkg| &pkg.binaries)
+        .filter_map(|bin| bin.file_name()?.to_str())
+        .collect();
 
     for entry in fs::read_dir(&bin_path)
         .with_context(|| format!("Failed to read bin directory: {}", bin_path.display()))?
@@ -201,7 +189,7 @@ fn build_package(
         }
     }
 
-    println!("Linking {}", package.url);
+    println!("Linking {}", name);
     for binary in package.binaries.iter() {
         let symlink_path = bin_path.join(
             binary

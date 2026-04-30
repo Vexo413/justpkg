@@ -3,7 +3,6 @@ use anyhow::{Context, Result, anyhow};
 use git2::Oid;
 use justpkg::{Package, Shell, get_packages, millis_to_datetime, resolve_remote_ref, save_repos};
 use microxdg::Xdg;
-use regex::Regex;
 use std::{
     env, fs,
     io::Write,
@@ -11,7 +10,6 @@ use std::{
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
-use which::which_re_in;
 
 pub fn init(shell: Shell) -> Result<()> {
     let xdg = Xdg::new().context("Failed to find XDG directories")?;
@@ -80,17 +78,6 @@ pub fn add(
             .with_context(|| format!("Failed to resolve HEAD for {}", url))?,
     }
     .to_string();
-    let binaries = if binaries.is_empty() {
-        which_re_in(
-            Regex::new(".*")?,
-            Some(Xdg::new()?.data()?.join("justpkg/repos").join(&name)),
-        )?
-        .collect()
-    } else {
-        binaries
-    };
-
-    dbg!(&binaries);
 
     let entry = Package {
         commit,
