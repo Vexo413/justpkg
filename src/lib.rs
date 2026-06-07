@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     env, fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, UNIX_EPOCH},
 };
 
@@ -15,21 +15,16 @@ pub struct Package {
     pub url: String,
     pub commit: String,
     pub synced_at: u128,
-    pub build_script: PathBuf,
-    pub binaries: Vec<PathBuf>,
+    pub install_script: PathBuf,
+    pub install_hash: String,
+    pub uninstall_script: PathBuf,
+    pub uninstall_hash: String,
     pub dependencies: HashSet<String>,
 }
 
-pub fn get_packages() -> Result<HashMap<String, Package>> {
-    let config_path = Xdg::new()
-        .context("Failed to initialize XDG directories")?
-        .config()
-        .context("Failed to get XDG config directory")?
-        .join("justpkg");
-    let path = config_path.join("repos.json");
-
+pub fn get_packages(path: &Path) -> Result<HashMap<String, Package>> {
     if path.exists() {
-        let file = fs::File::open(&path)
+        let file = fs::File::open(path)
             .with_context(|| format!("Failed to open config file: {}", path.display()))?;
         Ok(serde_json::from_reader(file)
             .with_context(|| format!("Failed to parse config file: {}", path.display()))?)

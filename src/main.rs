@@ -28,15 +28,15 @@ enum Commands {
         name: String,
         /// Git remote URL
         url: String,
-        /// Current directory build script paths
-        #[arg(long, short)]
-        script: Option<PathBuf>,
+        /// Current directory install script paths
+        #[arg(long)]
+        install_script: Option<PathBuf>,
+        /// Current directory uninstall script paths
+        #[arg(long)]
+        uninstall_script: Option<PathBuf>,
         /// Commit hash
         #[arg(long, short)]
         commit: Option<String>,
-        /// Repo relative binary paths (If not provided will search for binaries FIRST time)
-        #[arg(long, short)]
-        binaries: Vec<PathBuf>,
         /// Dependencies
         #[arg(long, short)]
         dependencies: Vec<String>,
@@ -80,13 +80,20 @@ fn main() -> Result<()> {
         Some(Commands::Add {
             name,
             url,
-            script,
+            install_script,
+            uninstall_script,
             commit,
-            binaries,
             dependencies,
         }) => {
             let oid: Option<git2::Oid> = commit.map(|c| git2::Oid::from_str(&c)).transpose()?;
-            add(name, url, script, oid, binaries, dependencies)?;
+            add(
+                name,
+                url,
+                install_script,
+                uninstall_script,
+                oid,
+                dependencies,
+            )?;
             Ok(())
         }
         Some(Commands::Update { names }) => {

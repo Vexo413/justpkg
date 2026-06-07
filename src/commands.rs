@@ -3,6 +3,7 @@ use anyhow::{Context, Result, anyhow};
 use git2::Oid;
 use justpkg::{Package, Shell, get_packages, millis_to_datetime, resolve_remote_ref, save_repos};
 use microxdg::Xdg;
+use sha2::Digest;
 use std::{
     env, fs,
     io::Write,
@@ -41,9 +42,9 @@ pub fn init(shell: Shell) -> Result<()> {
 pub fn add(
     name: String,
     url: String,
-    build_script: Option<PathBuf>,
+    install_script: Option<PathBuf>,
+    uninstall_script: Option<PathBuf>,
     commit: Option<Oid>,
-    binaries: Vec<PathBuf>,
     dependencies: Vec<String>,
 ) -> Result<()> {
     if !name
@@ -52,26 +53,54 @@ pub fn add(
     {
         return Err(anyhow!("{name} is not a valid package name"));
     }
-    let mut repo_infos = get_packages().context("Failed to load package database")?;
+    let config_path = Xdg::new()
+        .context("Failed to initialize XDG directories")?
+        .config()
+        .context("Failed to get XDG config directory")?
+        .join("justpkg");
+    let path = config_path.join("repos.json");
 
-    let build_script_paths = Xdg::new()?.config()?.join("justpkg/build-scripts");
-    fs::create_dir_all(&build_script_paths)?;
-    let build_script = match build_script {
+    let mut packages = get_packages(&path).context("Failed to load package database")?;
+
+    let install_scripts_path = Xdg::new()?.config()?.join("justpkg/install-scripts");
+    fs::create_dir_all(&install_scripts_path)?;
+    let install_script = match install_script {
         Some(path) => {
             let src = env::current_dir()?.join(&path);
-            let dst = build_script_paths.join(format!("{}.sh", &name));
+            let dst = install_scripts_path.join(format!("{}.sh", &name));
             fs::copy(src, &dst)?;
             dst
         }
         None => {
             let editor = env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-            let path = build_script_paths.join(format!("{}.sh", &name));
+            let path = install_scripts_path.join(format!("{}.sh", &name));
             let mut file = fs::File::create(&path)?;
             file.write_all(String::from("#!/usr/bin/env bash\nset -euo pipefail").as_bytes())?;
             Command::new(editor).arg(&path).status()?;
             path
         }
     };
+    let install_hash = hex::encode(sha2::Sha256::digest(std::fs::read(&install_script)?));
+
+    let uninstall_scripts_path = Xdg::new()?.config()?.join("justpkg/uninstall-scripts");
+    fs::create_dir_all(&uninstall_scripts_path)?;
+    let uninstall_script = match uninstall_script {
+        Some(path) => {
+            let src = env::current_dir()?.join(&path);
+            let dst = uninstall_scripts_path.join(format!("{}.sh", &name));
+            fs::copy(src, &dst)?;
+            dst
+        }
+        None => {
+            let editor = env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+            let path = uninstall_scripts_path.join(format!("{}.sh", &name));
+            let mut file = fs::File::create(&path)?;
+            file.write_all(String::from("#!/usr/bin/env bash\nset -euo pipefail").as_bytes())?;
+            Command::new(editor).arg(&path).status()?;
+            path
+        }
+    };
+    let uninstall_hash = hex::encode(sha2::Sha256::digest(std::fs::read(&uninstall_script)?));
 
     let commit = match commit {
         Some(c) => c,
@@ -87,19 +116,21 @@ pub fn add(
             .duration_since(UNIX_EPOCH)
             .context("Failed to get current time")?
             .as_millis(),
-        binaries,
-        build_script,
+        install_script,
+        install_hash,
+        uninstall_script,
+        uninstall_hash,
         dependencies: dependencies.into_iter().collect(),
     };
 
-    let changed = match repo_infos.get(&name) {
+    let changed = match packages.get(&name) {
         Some(old) => old != &entry,
         None => true,
     };
 
     if changed {
-        repo_infos.insert(name, entry);
-        save_repos(&repo_infos).context("Failed to save package database")?;
+        packages.insert(name, entry);
+        save_repos(&packages).context("Failed to save package database")?;
     }
 
     rebuild().context("Failed to rebuild packages")?;
@@ -115,11 +146,19 @@ fn split_name_ref(s: &str) -> (&str, Option<&str>) {
 }
 
 pub fn update(names: Vec<String>) -> Result<()> {
-    let mut repo_infos = get_packages().context("Failed to load package database")?;
+    let config_path = Xdg::new()
+        .context("Failed to initialize XDG directories")?
+        .config()
+        .context("Failed to get XDG config directory")?
+        .join("justpkg");
+    let path = config_path.join("repos.json");
+
+    let mut packages = get_packages(&path).context("Failed to load package database")?;
+
     let mut changed = false;
 
     for (name, reference) in names.iter().map(|n| split_name_ref(n)) {
-        let package = repo_infos
+        let package = packages
             .get_mut(name)
             .ok_or_else(|| anyhow!("{} not found", name))?;
 
@@ -147,7 +186,7 @@ pub fn update(names: Vec<String>) -> Result<()> {
     }
 
     if changed {
-        save_repos(&repo_infos).context("Failed to save package database")?;
+        save_repos(&packages).context("Failed to save package database")?;
         rebuild().context("Failed to rebuild packages")?;
     }
 
@@ -156,18 +195,26 @@ pub fn update(names: Vec<String>) -> Result<()> {
 }
 
 pub fn remove(names: Vec<String>) -> Result<()> {
-    let mut repo_infos = get_packages().context("Failed to load package database")?;
+    let config_path = Xdg::new()
+        .context("Failed to initialize XDG directories")?
+        .config()
+        .context("Failed to get XDG config directory")?
+        .join("justpkg");
+    let path = config_path.join("repos.json");
+
+    let mut packages = get_packages(&path).context("Failed to load package database")?;
+
     let mut changed = false;
 
     for name in names {
-        if repo_infos.remove(&name).is_some() {
+        if packages.remove(&name).is_some() {
             changed = true;
             println!("Removed: {}", name);
         }
     }
 
     if changed {
-        save_repos(&repo_infos).context("Failed to save package database")?;
+        save_repos(&packages).context("Failed to save package database")?;
         rebuild().context("Failed to rebuild packages")?;
     }
 
@@ -176,15 +223,21 @@ pub fn remove(names: Vec<String>) -> Result<()> {
 }
 
 pub fn list() -> Result<()> {
-    let repo_infos = get_packages().context("Failed to load package database")?;
+    let config_path = Xdg::new()
+        .context("Failed to initialize XDG directories")?
+        .config()
+        .context("Failed to get XDG config directory")?
+        .join("justpkg");
+    let path = config_path.join("repos.json");
 
-    for (name, repo_info) in repo_infos.iter() {
+    let packages = get_packages(&path).context("Failed to load package database")?;
+
+    for (name, package) in packages.iter() {
         println!(
-            "{}: {} | {} | {:?}",
+            "{}: {} | {}",
             name,
-            repo_info.url,
-            millis_to_datetime(repo_info.synced_at as u64),
-            repo_info.binaries
+            package.url,
+            millis_to_datetime(package.synced_at as u64),
         );
     }
 
@@ -192,21 +245,27 @@ pub fn list() -> Result<()> {
 }
 
 pub fn info(name: String) -> Result<()> {
-    let repo_infos = get_packages().context("Failed to load package database")?;
+    let config_path = Xdg::new()
+        .context("Failed to initialize XDG directories")?
+        .config()
+        .context("Failed to get XDG config directory")?
+        .join("justpkg");
+    let path = config_path.join("repos.json");
 
-    let repo_info = repo_infos
+    let packages = get_packages(&path).context("Failed to load package database")?;
+
+    let package = packages
         .get(&name)
         .ok_or_else(|| anyhow!("{} not found", name))?;
 
     println!("Name: {}", name);
-    println!("URL: {}", repo_info.url);
+    println!("URL: {}", package.url);
     println!(
         "Synced at: {}",
-        millis_to_datetime(repo_info.synced_at as u64)
+        millis_to_datetime(package.synced_at as u64)
     );
-    println!("Commit: {}", repo_info.commit);
-    println!("Binaries: {:?}", repo_info.binaries);
-    println!("Dependencies: {:?}", repo_info.dependencies);
+    println!("Commit: {}", package.commit);
+    println!("Dependencies: {:?}", package.dependencies);
 
     Ok(())
 }

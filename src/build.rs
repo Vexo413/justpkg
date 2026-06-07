@@ -1,31 +1,31 @@
 use anyhow::{Context, Result, anyhow};
 use justpkg::{Package, get_packages};
 use microxdg::Xdg;
-use std::{collections::HashSet, fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
+use sha2::Digest;
+use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
 use topological_sort::TopologicalSort;
 
 pub fn rebuild() -> Result<()> {
-    // Setup
-    let packages = get_packages().context("Failed to load package database")?;
     let xdg = Xdg::new().context("Failed to find XDG directories")?;
-
+    let config_path = xdg
+        .config()
+        .context("Failed to get XDG config directory")?
+        .join("justpkg");
     let data_path = xdg
         .data()
         .context("Failed to get XDG data directory")?
         .join("justpkg");
 
+    let user_config_path = config_path.join("repos.json");
+    let internal_config_path = data_path.join("repos.json");
+
+    let user_packages =
+        get_packages(&user_config_path).context("Failed to load package database from config")?;
+
     let repos_path = data_path.join("repos");
     fs::create_dir_all(&repos_path)
         .with_context(|| format!("Failed to create repos directory: {}", repos_path.display()))?;
 
-    let bin_path = data_path.join("bin");
-    fs::create_dir_all(&bin_path)
-        .with_context(|| format!("Failed to create bin directory: {}", bin_path.display()))?;
-
-    let config_path = xdg
-        .config()
-        .context("Failed to get XDG config directory")?
-        .join("justpkg");
     fs::create_dir_all(&config_path).with_context(|| {
         format!(
             "Failed to create config directory: {}",
@@ -34,17 +34,17 @@ pub fn rebuild() -> Result<()> {
     })?;
 
     let mut ts = TopologicalSort::<&String>::new();
-    for (name, package) in &packages {
+    for (name, package) in &user_packages {
         ts.insert(name);
-        for dep in &package.dependencies {
-            if !packages.contains_key(dep) {
+        for dependency in &package.dependencies {
+            if !user_packages.contains_key(dependency) {
                 return Err(anyhow!(
                     "Package {} depends on unknown package {}",
                     name,
-                    dep
+                    dependency
                 ));
             }
-            ts.add_dependency(dep, name);
+            ts.add_dependency(dependency, name);
         }
     }
 
@@ -59,7 +59,7 @@ pub fn rebuild() -> Result<()> {
 
     // Install
     for name in sorted_packages {
-        let package = &packages[name];
+        let package = &user_packages[name];
         if !name
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
@@ -76,78 +76,77 @@ pub fn rebuild() -> Result<()> {
             None
         };
 
-        match build_package(name, package, &repos_path, &bin_path, &config_path) {
+        match install_package(name, package, &repos_path, &config_path) {
             Err(e) => {
-                eprintln!("{} build failed: {e}", package.url);
-                if exists {
-                    if let Some(head) = original_head
-                        && let Ok(repo) = git2::Repository::open(&repo_path)
-                    {
-                        let _ = repo.set_head_detached(head);
-                        let _ =
-                            repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()));
-                        let _ = Command::new("git")
-                            .args(["clean", "-fd"])
-                            .current_dir(&repo_path)
-                            .status();
-                    }
+                eprintln!("{} install failed: {e}", package.url);
+                if exists
+                    && let Some(head) = original_head
+                    && let Ok(repo) = git2::Repository::open(&repo_path)
+                {
+                    let _ = repo.set_head_detached(head);
+                    let _ = repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()));
+                    let _ = Command::new("git")
+                        .args(["clean", "-fd"])
+                        .current_dir(&repo_path)
+                        .status();
                 } else if repo_path.exists() {
                     let _ = fs::remove_dir_all(&repo_path);
                 }
             }
             Ok(()) => {
-                println!("{} build succeeded", &name)
+                println!("{} install succeeded", &name)
             }
         }
     }
 
-    println!("Cleaning...");
-    let valid_repos: HashSet<&str> = packages.keys().map(|s| s.as_str()).collect();
-    for entry in fs::read_dir(&repos_path)
-        .with_context(|| format!("Failed to read data directory: {}", repos_path.display()))?
-    {
-        let entry = entry?;
-        let path = entry.path();
+    let internal_packages =
+        get_packages(&internal_config_path).context("Failed to load package database from data")?;
 
-        if path.is_dir()
-            && let Some(name) = path.file_name().and_then(|s| s.to_str())
-            && !valid_repos.contains(name)
-        {
-            fs::remove_dir_all(&path)
-                .with_context(|| format!("Failed to remove stale repo: {}", path.display()))?;
+    let removed_packages = internal_packages
+        .keys()
+        .filter(|k| !user_packages.contains_key(*k));
+
+    for name in removed_packages {
+        let package = &internal_packages[name];
+        let repo_path = repos_path.join(name);
+        let exists = repo_path.exists();
+        let original_head = if exists {
+            git2::Repository::open(&repo_path)
+                .ok()
+                .and_then(|r| r.head().ok()?.target())
+        } else {
+            None
+        };
+
+        match uninstall_package(name, package, &repos_path) {
+            Err(e) => {
+                eprintln!("{} uninstall failed: {e}", package.url);
+                if exists
+                    && let Some(head) = original_head
+                    && let Ok(repo) = git2::Repository::open(&repo_path)
+                {
+                    let _ = repo.set_head_detached(head);
+                    let _ = repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()));
+                    let _ = Command::new("git")
+                        .args(["clean", "-fd"])
+                        .current_dir(&repo_path)
+                        .status();
+                }
+            }
+            Ok(()) => {
+                println!("{} uninstall succeeded", &name)
+            }
         }
     }
-
-    let valid_binaries: HashSet<&str> = packages
-        .values()
-        .flat_map(|pkg| &pkg.binaries)
-        .filter_map(|bin| bin.file_name()?.to_str())
-        .collect();
-
-    for entry in fs::read_dir(&bin_path)
-        .with_context(|| format!("Failed to read bin directory: {}", bin_path.display()))?
-    {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path.is_file()
-            && let Some(name) = path.file_name().and_then(|s| s.to_str())
-            && !valid_binaries.contains(name)
-        {
-            fs::remove_file(&path).with_context(|| {
-                format!("Failed to remove stale binary symlink: {}", path.display())
-            })?;
-        }
-    }
+    fs::copy(&user_config_path, &internal_config_path)?;
 
     Ok(())
 }
 
-fn build_package(
+fn install_package(
     name: &str,
     package: &Package,
     repos_path: &Path,
-    bin_path: &Path,
     config_path: &Path,
 ) -> Result<()> {
     if name.contains("..") || name.contains('/') {
@@ -165,9 +164,15 @@ fn build_package(
     let target = git2::Oid::from_str(&package.commit)
         .with_context(|| format!("Failed to parse commit hash '{}'", package.commit))?;
 
-    // TODO add build script change detection
     let needs_update = repo.head()?.peel_to_commit()?.id() != target
-        || !package.binaries.iter().all(|b| repo_path.join(b).exists());
+        || package.install_hash
+            != hex::encode(sha2::Sha256::digest(std::fs::read(
+                &package.install_script,
+            )?))
+        || package.uninstall_hash
+            != hex::encode(sha2::Sha256::digest(std::fs::read(
+                &package.uninstall_script,
+            )?));
 
     if needs_update {
         println!("Building {}", package.url);
@@ -193,47 +198,55 @@ fn build_package(
         repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
             .with_context(|| format!("Failed to checkout commit {}", package.commit))?;
 
-        let build_script = config_path.join(&package.build_script);
+        let install_script = config_path.join(&package.install_script);
 
-        let mut perms = fs::metadata(&build_script)?.permissions();
+        let mut perms = fs::metadata(&install_script)?.permissions();
         let mode = perms.mode();
         perms.set_mode(mode | 0o111);
-        fs::set_permissions(&build_script, perms)?;
+        fs::set_permissions(&install_script, perms)?;
 
-        let status = Command::new(&build_script)
+        let status = Command::new(&install_script)
             .current_dir(&repo_path)
             .status()
             .with_context(|| {
-                format!("Failed to execute build script: {}", build_script.display())
+                format!(
+                    "Failed to execute install script: {}",
+                    install_script.display()
+                )
             })?;
 
         if !status.success() {
             let error_msg = match status.code() {
-                Some(code) => format!("build failed for {} with exit code {}", name, code),
-                None => format!("build process terminated unexpectedly for {}", name),
+                Some(code) => format!("install failed for {} with exit code {}", name, code),
+                None => format!("install process terminated unexpectedly for {}", name),
             };
             return Err(anyhow!(error_msg));
         }
     }
 
-    println!("Linking {}", name);
-    for binary in package.binaries.iter() {
-        let symlink_path = bin_path.join(
-            binary
-                .file_name()
-                .ok_or_else(|| anyhow!("Binary path has no file name: {}", binary.display()))?
-                .to_string_lossy()
-                .as_ref(),
-        );
-        let binary_path = repo_path.join(binary);
-        let _ = fs::remove_file(&symlink_path);
-        std::os::unix::fs::symlink(&binary_path, &symlink_path).with_context(|| {
+    Ok(())
+}
+
+fn uninstall_package(name: &str, package: &Package, repos_path: &Path) -> Result<()> {
+    let repo_path = repos_path.join(name);
+
+    let status = Command::new(&package.uninstall_script)
+        .current_dir(&repo_path)
+        .status()
+        .with_context(|| {
             format!(
-                "Failed to symlink binary '{}' from '{}'",
-                binary.display(),
-                binary_path.display()
+                "Failed to execute uninstall script: {}",
+                package.uninstall_script.display()
             )
         })?;
+
+    if !status.success() {
+        let error_msg = match status.code() {
+            Some(code) => format!("uninstall failed for {} with exit code {}", name, code),
+            None => format!("uninstall process terminated unexpectedly for {}", name),
+        };
+        return Err(anyhow!(error_msg));
     }
+    fs::remove_dir_all(repos_path.join(name))?;
     Ok(())
 }
